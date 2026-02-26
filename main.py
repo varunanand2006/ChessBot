@@ -1,6 +1,8 @@
 from board import Board
 from search import *
 
+
+
 def parse_move(move_str):
     # expects format like "e2e4"
     from_file = ord(move_str[0]) - ord('a')
@@ -20,6 +22,7 @@ print(board)
 
 while True:
     print(board)
+    #print(evaluate(board))
 
     if board.white_to_move:
         move_input = input("Your move (e2e4): ")
@@ -38,25 +41,36 @@ while True:
 
         board.make_move(move)
 
-    else:
-        print("Bot thinking...")
 
-        best_score = -float("inf")
-        best_move = None
+    else:
+
+        print("Bot thinking...")
 
         moves = generate_legal_moves(board)
 
-        for move in moves:
-            board.make_move(move)
-            score = minimax(board, depth=4, alpha=-float("inf"), beta=float("inf"))
-            board.undo_move()
-
-            if score > best_score:
-                best_score = score
-                best_move = move
-
-        if best_move is None:
+        if not moves:
             print("Game over.")
             break
+
+        best_move = None
+
+        if board.white_to_move:
+            best_score = -float("inf")
+        else:
+            best_score = float("inf")
+
+        for move in moves:
+            board.make_move(move)
+            score = minimax(board, depth=3, alpha=-float("inf"), beta=float("inf"))
+            board.undo_move()
+
+            if board.white_to_move:
+                if score > best_score:
+                    best_score = score
+                    best_move = move
+            else:
+                if score < best_score:
+                    best_score = score
+                    best_move = move
 
         board.make_move(best_move)

@@ -1,6 +1,6 @@
-from movegen import generate_all_moves
 from constants import *
 from movegen import generate_legal_moves
+from board import *
 
 def evaluate(board):
 
@@ -38,10 +38,7 @@ def evaluate(board):
             elif abs_piece == QUEEN:
                 table_value = QUEEN_TABLE[r][c] if piece > 0 else QUEEN_TABLE[7-r][c]
             elif abs_piece == KING:
-                if total_non_pawn_material < 1300:
-                    table_value = KING_END_TABLE[r][c] if piece > 0 else KING_END_TABLE[7-r][c]
-                else:
-                    table_value = KING_TABLE[r][c] if piece > 0 else KING_TABLE[7-r][c]
+                table_value = KING_TABLE[r][c] if piece > 0 else KING_TABLE[7-r][c]
             else:
                 table_value = 0
 
@@ -69,13 +66,16 @@ def minimax(board, depth, alpha, beta):
 
     if not legal_moves:
         if board.is_in_check(board.white_to_move):
-            return -99999  # checkmate
+            # Side to move is checkmated
+            if board.white_to_move:
+                return -99999 # White is mated → bad for White
+            else:
+                return 99999  # Black is mated → good for White
         return 0  # stalemate
 
     if board.white_to_move:
         max_eval = -float("inf")
         # Move ordering
-        legal_moves.sort(key=lambda m: board.squares[m[2]][m[3]] != 0, reverse=True)
         for move in legal_moves:
             board.make_move(move)
             eval = minimax(board, depth-1, alpha, beta)
@@ -87,7 +87,6 @@ def minimax(board, depth, alpha, beta):
         return max_eval
     else:
         min_eval = float("inf")
-        legal_moves.sort(key=lambda m: board.squares[m[2]][m[3]] != 0, reverse=True)
         for move in legal_moves:
             board.make_move(move)
             eval = minimax(board, depth-1, alpha, beta)
@@ -98,41 +97,13 @@ def minimax(board, depth, alpha, beta):
                 break
         return min_eval
 
+board = Board()
 
-def negamax(board, depth, alpha, beta):
+board.squares[0][0] = KING
+board.squares[1][1] = -KNIGHT
 
-    if depth == 0:
-        return evaluate(board)
+board.white_king_pos = (0, 0)
+board.black_king_pos = (7, 7)  # put black king somewhere safe
+board.initialize_king_cache()
 
-    legal_moves = generate_legal_moves(board)
-
-    if not legal_moves:
-        if board.is_in_check(board.white_to_move):
-            return -99999  # checkmate
-        return 0  # stalemate
-
-    # Simple move ordering (captures first)
-    legal_moves.sort(
-        key=lambda m: abs(board.squares[m[2]][m[3]]),
-        reverse=True
-    )
-
-    max_eval = -float("inf")
-
-    for move in legal_moves:
-        board.make_move(move)
-
-        # Negamax principle:
-        eval = -negamax(board, depth - 1, -beta, -alpha)
-
-        board.undo_move()
-
-        if eval > max_eval:
-            max_eval = eval
-
-        alpha = max(alpha, eval)
-
-        if alpha >= beta:
-            break  # alpha-beta pruning
-
-    return max_eval
+print(board.is_in_check(True))

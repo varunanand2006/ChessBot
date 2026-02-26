@@ -1,7 +1,6 @@
 # Piece Types
 
 EMPTY  = 0
-
 PAWN   = 1
 KNIGHT = 2
 BISHOP = 3
@@ -19,6 +18,15 @@ PIECE_VALUES = {
     4: 500,   # Rook
     5: 900,   # Queen
     6: 0      # King
+}
+
+PIECE_DICT = {
+    1: "Pawn",   # Pawn
+    2: "Knight",   # Knight
+    3: "Bishop",   # Bishop
+    4: "Rook",   # Rook
+    5: "Queen",   # Queen
+    6: "King"      # King
 }
 
 # Move center pawns, encourage moving up ranks

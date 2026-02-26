@@ -100,8 +100,14 @@ class Board:
             "white_to_move": self.white_to_move
         })
 
-        self.squares[r2][c2] = moving
         self.squares[r1][c1] = EMPTY
+        # Auto-queen promotion
+        if moving == PAWN and r2 == 0:
+            self.squares[r2][c2] = QUEEN
+        elif moving == -PAWN and r2 == 7:
+            self.squares[r2][c2] = -QUEEN
+        else:
+            self.squares[r2][c2] = moving
 
         if moving == KING:
             self.white_king_pos = (r2, c2)
@@ -161,6 +167,19 @@ class Board:
                 if piece == (KNIGHT if by_white else -KNIGHT):
                     return True
 
+        # King attacks (adjacent squares)
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                rr = r + dr
+                cc = c + dc
+                if 0 <= rr < 8 and 0 <= cc < 8:
+                    piece = self.squares[rr][cc]
+                    if piece == (KING if by_white else -KING):
+                        return True
+
+
         # Sliding pieces
         directions = [
             (1,0),(-1,0),(0,1),(0,-1),
@@ -177,14 +196,10 @@ class Board:
                             return True
                         if (dr != 0 and dc != 0) and piece in (BISHOP, QUEEN):
                             return True
-                        if abs(rr-r) == 1 and abs(cc-c) <= 1 and piece == KING:
-                            return True
                     if not by_white and piece < 0:
                         if (dr == 0 or dc == 0) and piece in (-ROOK, -QUEEN):
                             return True
                         if (dr != 0 and dc != 0) and piece in (-BISHOP, -QUEEN):
-                            return True
-                        if abs(rr-r) == 1 and abs(cc-c) <= 1 and piece == -KING:
                             return True
                     break
                 rr += dr
@@ -194,12 +209,12 @@ class Board:
 
     def __str__(self):
         piece_symbols = {
-            1: "♙", -1: "♟",
-            2: "♘", -2: "♞",
-            3: "♗", -3: "♝",
-            4: "♖", -4: "♜",
-            5: "♕", -5: "♛",
-            6: "♔", -6: "♚",
+            -1: "♙", 1: "♟",
+            -2: "♘", 2: "♞",
+            -3: "♗", 3: "♝",
+            -4: "♖", 4: "♜",
+            -5: "♕", 5: "♛",
+            -6: "♔", 6: "♚",
             0: " "
         }
 
@@ -228,8 +243,3 @@ class Board:
             result += "Black to move\n"
 
         return result
-
-
-board = Board()
-board.setup_starting_position()
-print(board)

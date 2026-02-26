@@ -167,6 +167,9 @@ def generate_legal_moves(board):
     legal = []
 
     for move in moves:
+        r1, c1, r2, c2 = move
+        if abs(board.squares[r2][c2]) == KING:
+            continue
         board.make_move(move)
 
         # After move, side has flipped.
@@ -177,3 +180,4 @@ def generate_legal_moves(board):
         board.undo_move()
 
     return legal
+
