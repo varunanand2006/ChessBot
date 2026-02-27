@@ -57,6 +57,21 @@ def evaluate(board):
 
     return material_score + positional_score + check_penalty
 
+def score_move(board, move):
+    r1, c1, r2, c2 = move
+    moving = board.squares[r1][c1]
+    target = board.squares[r2][c2]
+
+    score = 0
+
+    # Captures first (MVV-LVA)
+    if target != EMPTY:
+        victim_value = abs(target)
+        attacker_value = abs(moving)
+
+        score += 10000 + (victim_value * 10 - attacker_value)
+
+    return score
 
 def minimax(board, depth, alpha, beta):
     if depth == 0:
@@ -72,6 +87,9 @@ def minimax(board, depth, alpha, beta):
             else:
                 return 99999  # Black is mated → good for White
         return 0  # stalemate
+
+    # ===== MOVE ORDERING =====
+    legal_moves.sort(key=lambda move: score_move(board, move), reverse=True)
 
     if board.white_to_move:
         max_eval = -float("inf")

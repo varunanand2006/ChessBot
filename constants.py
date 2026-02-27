@@ -1,5 +1,18 @@
 # Piece Types
 
+instructions = """
+================Chess================
+Most rules implemented
+-No en-passant, no castling
+-No 3-fold move repetition
+-No 50-move rule
+-Auto-queen on pawn promotion
+-Stalemate draws
+
+Type in moves as startend 
+Example: e2e4 or d5e3
+"""
+
 EMPTY  = 0
 PAWN   = 1
 KNIGHT = 2
@@ -20,6 +33,7 @@ PIECE_VALUES = {
     6: 0      # King
 }
 
+# For debugging
 PIECE_DICT = {
     1: "Pawn",   # Pawn
     2: "Knight",   # Knight
