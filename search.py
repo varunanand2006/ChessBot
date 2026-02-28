@@ -47,18 +47,10 @@ def evaluate(board):
             else:
                 positional_score -= table_value
 
-
-    # Check penalty
-    check_penalty = 0
-    if board.is_in_check(True):
-        check_penalty -= 50
-    if board.is_in_check(False):
-        check_penalty += 50
-
-    return material_score + positional_score + check_penalty
+    return material_score + positional_score
 
 def score_move(board, move):
-    r1, c1, r2, c2 = move
+    r1, c1, r2, c2, v5 = move
     moving = board.squares[r1][c1]
     target = board.squares[r2][c2]
 
@@ -68,8 +60,10 @@ def score_move(board, move):
     if target != EMPTY:
         victim_value = abs(target)
         attacker_value = abs(moving)
-
         score += 10000 + (victim_value * 10 - attacker_value)
+
+    if v5 == 1:
+        score += 10000
 
     return score
 
@@ -89,7 +83,9 @@ def minimax(board, depth, alpha, beta):
         return 0  # stalemate
 
     # ===== MOVE ORDERING =====
-    legal_moves.sort(key=lambda move: score_move(board, move), reverse=True)
+    scored_moves = [(score_move(board, m), m) for m in legal_moves]
+    scored_moves.sort(reverse=True)
+    legal_moves = [m for (_, m) in scored_moves]
 
     if board.white_to_move:
         max_eval = -float("inf")
@@ -115,13 +111,13 @@ def minimax(board, depth, alpha, beta):
                 break
         return min_eval
 
-board = Board()
+#board = Board()
 
-board.squares[0][0] = KING
-board.squares[1][1] = -KNIGHT
+#board.squares[0][0] = KING
+#board.squares[1][1] = -KNIGHT
 
-board.white_king_pos = (0, 0)
-board.black_king_pos = (7, 7)  # put black king somewhere safe
-board.initialize_king_cache()
+#board.white_king_pos = (0, 0)
+#board.black_king_pos = (7, 7)  # put black king somewhere safe
+#board.initialize_king_cache()
 
-print(board.is_in_check(True))
+#print(board.is_in_check(True))
