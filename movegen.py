@@ -36,11 +36,15 @@ def generate_piece_moves(board, r, c):
     elif abs(piece) == KNIGHT:
         return generate_knight_moves(board, r, c)
     elif abs(piece) == BISHOP:
-        return generate_sliding_moves(board, r, c, [(1,1),(1,-1),(-1,1),(-1,-1)])
+        return generate_sliding_moves(board, r, c,
+                                      [(1,1),(1,-1),(-1,1),(-1,-1)])
     elif abs(piece) == ROOK:
-        return generate_sliding_moves(board, r, c,[(1,0),(-1,0),(0,1),(0,-1)])
+        return generate_sliding_moves(board, r, c,
+                                      [(1,0),(-1,0),(0,1),(0,-1)])
     elif abs(piece) == QUEEN:
-        return generate_sliding_moves(board, r, c,[(1,0),(-1,0),(0,1),(0,-1), (1,1),(1,-1),(-1,1),(-1,-1)])
+        return generate_sliding_moves(board, r, c,
+                                      [(1,0),(-1,0),(0,1),(0,-1),
+                                       (1,1),(1,-1),(-1,1),(-1,-1)])
     elif abs(piece) == KING:
         return generate_king_moves(board, r, c)
 
@@ -54,7 +58,7 @@ def generate_piece_moves(board, r, c):
 def generate_pawn_moves(board, r, c):
     moves = []
     piece = board.squares[r][c]
-    white = piece > 0 # True -> white,  False -> black
+    white = piece > 0
 
     direction = -1 if white else 1
     start_row = 6 if white else 1
@@ -62,37 +66,20 @@ def generate_pawn_moves(board, r, c):
     # Single forward
     if 0 <= r + direction < 8:
         if board.squares[r + direction][c] == EMPTY:
-            # Pawn promotion
-            if (white and r + direction == 0) or (not white and r + direction == 7):
-                moves.append((r, c, r + direction, c, PROMOTION))
-            # No pawn promotion
-            else:
-                moves.append((r, c, r + direction, c, QUIET))
+            moves.append((r, c, r + direction, c))
 
             # Double forward
             if r == start_row and board.squares[r + 2*direction][c] == EMPTY:
-                moves.append((r, c, r + 2*direction, c, QUIET))
+                moves.append((r, c, r + 2*direction, c))
 
     # Captures
     for dc in (-1, 1):
-        rr = r + direction  # Possible capture square row
-        cc = c + dc         # Possible capture square column
-        # Check bounds
+        rr = r + direction
+        cc = c + dc
         if 0 <= rr < 8 and 0 <= cc < 8:
-            # Check en-passant captures
-            if board.en_passant_square is not None:
-                if board.en_passant_square == (rr, cc):
-                    moves.append((r, c, rr, cc, EN_PASSANT))
-
             target = board.squares[rr][cc]
-            # Capture is possible
             if target != EMPTY and (target > 0) != white:
-                # Capture & pawn promotion
-                if (white and rr == 0) or (not white and rr == 7):
-                    moves.append((r, c, rr, cc, PROMOTION))
-                # Capture & no pawn promotion
-                else:
-                    moves.append((r, c, rr, cc, QUIET))
+                moves.append((r, c, rr, cc))
 
     return moves
 
@@ -116,7 +103,7 @@ def generate_knight_moves(board, r, c):
         if 0 <= rr < 8 and 0 <= cc < 8:
             target = board.squares[rr][cc]
             if target == EMPTY or (target > 0) != white:
-                moves.append((r, c, rr, cc, QUIET))
+                moves.append((r, c, rr, cc))
 
     return moves
 
@@ -136,10 +123,10 @@ def generate_sliding_moves(board, r, c, directions):
             target = board.squares[rr][cc]
 
             if target == EMPTY:
-                moves.append((r, c, rr, cc, QUIET))
+                moves.append((r, c, rr, cc))
             else:
                 if (target > 0) != white:
-                    moves.append((r, c, rr, cc, QUIET))
+                    moves.append((r, c, rr, cc))
                 break
 
             rr += dr
@@ -166,8 +153,7 @@ def generate_king_moves(board, r, c):
             if 0 <= rr < 8 and 0 <= cc < 8:
                 target = board.squares[rr][cc]
                 if target == EMPTY or (target > 0) != white:
-                    moves.append((r, c, rr, cc, QUIET))
-
+                    moves.append((r, c, rr, cc))
 
     return moves
 
@@ -181,7 +167,7 @@ def generate_legal_moves(board):
     legal = []
 
     for move in moves:
-        r1, c1, r2, c2, flag = move
+        r1, c1, r2, c2 = move
         if abs(board.squares[r2][c2]) == KING:
             continue
         board.make_move(move)
@@ -194,4 +180,3 @@ def generate_legal_moves(board):
         board.undo_move()
 
     return legal
-

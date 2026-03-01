@@ -13,14 +13,6 @@ Type in moves as startend
 Example: e2e4 or d5e3
 """
 
-# Move Flags
-QUIET = 0
-PROMOTION = 1
-EN_PASSANT = 2
-#CASTLE_KINGSIDE = 3
-#CASTLE_QUEENSIDE = 4
-INPUT = 5
-
 EMPTY  = 0
 PAWN   = 1
 KNIGHT = 2
