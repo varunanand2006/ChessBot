@@ -3,7 +3,7 @@ from movegen import generate_legal_moves, encode_move, decode_move, move_to_stri
 from search import find_best_move
 from constants import *
 
-DEPTH = 4
+DEPTH = 3
 
 def parse_move(move_str):
     from_col = ord(move_str[0]) - ord('a')
@@ -14,7 +14,6 @@ def parse_move(move_str):
 
 board = Board()
 board.setup_starting_position()
-
 
 while True:
     print(board)
@@ -39,26 +38,30 @@ while True:
         move = parse_move(move_input)
         r1, c1, r2, c2, flag = decode_move(move)
 
-        # Fix en passant flag
-        if (abs(board.squares[r1][c1]) == PAWN
-                and board.en_passant_sq is not None
-                and (r2, c2) == board.en_passant_sq):
-            move = encode_move(r1, c1, r2, c2, FLAG_EN_PASSANT)
-
         # Promotion
         if abs(board.squares[r1][c1]) == PAWN and r2 == (0 if board.white_to_move else 7):
             while True:
                 promo_input = input("Promote to (q/r/b/n): ").lower()
-                flag = {"q": FLAG_PROMOTE_QUEEN, "r": FLAG_PROMOTE_ROOK,
-                        "b": FLAG_PROMOTE_BISHOP, "n": FLAG_PROMOTE_KNIGHT}.get(promo_input, FLAG_PROMOTE_QUEEN)
-                if promo_input == "q" or promo_input == "r" or promo_input == "b" or promo_input == "n":
+                if promo_input in ("q", "r", "b", "n"):
                     break
+            flag = {"q": FLAG_PROMOTE_QUEEN, "r": FLAG_PROMOTE_ROOK,
+                    "b": FLAG_PROMOTE_BISHOP, "n": FLAG_PROMOTE_KNIGHT}[promo_input]
             move = encode_move(r1, c1, r2, c2, flag)
 
+        # En passant flag fix
+        elif (abs(board.squares[r1][c1]) == PAWN
+                and board.en_passant_sq is not None
+                and (r2, c2) == board.en_passant_sq):
+            move = encode_move(r1, c1, r2, c2, FLAG_EN_PASSANT)
+
+        # Castling flag fix — player types e1g1 or e1c1
+        elif abs(board.squares[r1][c1]) == KING and abs(c2 - c1) == 2:
+            if c2 > c1:
+                move = encode_move(r1, c1, r2, c2, FLAG_CASTLE_KINGSIDE)
+            else:
+                move = encode_move(r1, c1, r2, c2, FLAG_CASTLE_QUEENSIDE)
+
         if move not in legal_moves:
-            print(f"Parsed move: {decode_move(move)}")
-
-
             print("Illegal move.")
             continue
 

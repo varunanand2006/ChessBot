@@ -18,13 +18,11 @@ def evaluate(board):
             abs_piece = abs(piece)
             value     = PIECE_VALUES[abs_piece]
 
-            # Material
             if piece > 0:
                 material_score += value
             else:
                 material_score -= value
 
-            # Positional
             if abs_piece == PAWN:
                 table = PAWN_TABLE
             elif abs_piece == KNIGHT:
@@ -47,7 +45,6 @@ def evaluate(board):
             else:
                 positional_score -= table_value
 
-    # Check penalty
     check_penalty = 0
     if board.is_in_check(True):
         check_penalty -= 50
@@ -68,17 +65,55 @@ def score_move(board, move):
 
     score = 0
 
-    # MVV-LVA: prioritize capturing high value pieces with low value pieces
+    # MVV-LVA
     if target != EMPTY:
         victim_value   = PIECE_VALUES[abs(target)]
         attacker_value = PIECE_VALUES[abs(moving)]
         score += 10000 + (victim_value * 10 - attacker_value)
 
-    # Promotions are likely good moves
+    # Promotion bonus
     if flag in PROMOTION_FLAGS:
         score += PIECE_VALUES[PROMOTION_PIECES[flag]]
 
     return score
+
+
+# ==========================================
+# Quiescence Search
+# ==========================================
+
+def quiescence(board, alpha, beta):
+    # Stand-pat: the side to move can always choose not to capture.
+    # If the static eval is already good enough, return it.
+    stand_pat = evaluate(board)
+
+    if stand_pat >= beta:
+        return beta
+    if stand_pat > alpha:
+        alpha = stand_pat
+
+    # Generate captures only (destination square is not empty)
+    legal_moves = generate_legal_moves(board)
+
+    captures = [
+        m for m in legal_moves
+        if board.squares[decode_move(m)[2]][decode_move(m)[3]] != EMPTY
+        or decode_move(m)[4] == FLAG_EN_PASSANT
+    ]
+
+    captures.sort(key=lambda m: score_move(board, m), reverse=True)
+
+    for move in captures:
+        board.make_move(move)
+        score = -quiescence(board, -beta, -alpha)
+        board.undo_move()
+
+        if score >= beta:
+            return beta
+        if score > alpha:
+            alpha = score
+
+    return alpha
 
 
 # ==========================================
@@ -87,17 +122,15 @@ def score_move(board, move):
 
 def minimax(board, depth, alpha, beta):
     if depth == 0:
-        return evaluate(board)
+        return quiescence(board, alpha, beta)
 
     legal_moves = generate_legal_moves(board)
 
     if not legal_moves:
         if board.is_in_check(board.white_to_move):
-            # Checkmate — worst outcome for the side to move
             return -99999 if board.white_to_move else 99999
         return 0  # Stalemate
 
-    # Move ordering
     legal_moves.sort(key=lambda move: score_move(board, move), reverse=True)
 
     if board.white_to_move:
@@ -139,7 +172,6 @@ def find_best_move(board, depth):
     if not legal_moves:
         return None
 
-    # Move ordering at root
     legal_moves.sort(key=lambda move: score_move(board, move), reverse=True)
 
     best_move  = legal_moves[0]
