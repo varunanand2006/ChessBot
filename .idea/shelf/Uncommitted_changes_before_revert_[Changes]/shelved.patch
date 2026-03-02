@@ -1,0 +1,428 @@
+Index: board.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>from constants import *\r\nfrom movegen import decode_move\r\n\r\nclass Board:\r\n    def __init__(self):\r\n        self.squares       = [[EMPTY] * 8 for _ in range(8)]\r\n        self.white_to_move = True\r\n\r\n        self.white_king_pos = None\r\n        self.black_king_pos = None\r\n\r\n        # En passant target square (landing square), or None\r\n        self.en_passant_sq = None\r\n\r\n        # Castling rights\r\n        self.castle_wk = True   # White kingside\r\n        self.castle_wq = True   # White queenside\r\n        self.castle_bk = True   # Black kingside\r\n        self.castle_bq = True   # Black queenside\r\n\r\n        # Move stack entries are flat tuples:\r\n        # (move, captured, wkr, wkc, bkr, bkc,\r\n        #  white_to_move, ep_r, ep_c,\r\n        #  castle_wk, castle_wq, castle_bk, castle_bq)\r\n        self.move_stack = []\r\n\r\n    # ==========================================\r\n    # Setup\r\n    # ==========================================\r\n\r\n    def setup_starting_position(self):\r\n        self.squares = [[EMPTY] * 8 for _ in range(8)]\r\n\r\n        for c in range(8):\r\n            self.squares[6][c] =  PAWN\r\n            self.squares[1][c] = -PAWN\r\n\r\n        self.squares[7][0] =  ROOK;  self.squares[7][7] =  ROOK\r\n        self.squares[0][0] = -ROOK;  self.squares[0][7] = -ROOK\r\n        self.squares[7][1] =  KNIGHT; self.squares[7][6] =  KNIGHT\r\n        self.squares[0][1] = -KNIGHT; self.squares[0][6] = -KNIGHT\r\n        self.squares[7][2] =  BISHOP; self.squares[7][5] =  BISHOP\r\n        self.squares[0][2] = -BISHOP; self.squares[0][5] = -BISHOP\r\n        self.squares[7][3] =  QUEEN;  self.squares[0][3] = -QUEEN\r\n        self.squares[7][4] =  KING;   self.squares[0][4] = -KING\r\n\r\n        self.white_king_pos = (7, 4)\r\n        self.black_king_pos = (0, 4)\r\n        self.white_to_move  = True\r\n        self.en_passant_sq  = None\r\n        self.castle_wk      = True\r\n        self.castle_wq      = True\r\n        self.castle_bk      = True\r\n        self.castle_bq      = True\r\n        self.move_stack     = []\r\n\r\n    def initialize_king_cache(self):\r\n        for r in range(8):\r\n            for c in range(8):\r\n                piece = self.squares[r][c]\r\n                if piece == KING:\r\n                    self.white_king_pos = (r, c)\r\n                elif piece == -KING:\r\n                    self.black_king_pos = (r, c)\r\n\r\n    # ==========================================\r\n    # Make / Undo\r\n    # ==========================================\r\n\r\n    def make_move(self, move):\r\n        r1, c1, r2, c2, flag = decode_move(move)\r\n\r\n        moving   = self.squares[r1][c1]\r\n        captured = self.squares[r2][c2]\r\n        white    = moving > 0\r\n\r\n        # Save state\r\n        wkr, wkc = self.white_king_pos\r\n        bkr, bkc = self.black_king_pos\r\n        ep_r, ep_c = self.en_passant_sq if self.en_passant_sq else (-1, -1)\r\n\r\n        self.move_stack.append((\r\n            move, captured,\r\n            wkr, wkc, bkr, bkc,\r\n            self.white_to_move,\r\n            ep_r, ep_c,\r\n            self.castle_wk, self.castle_wq,\r\n            self.castle_bk, self.castle_bq\r\n        ))\r\n\r\n        # Clear en passant — re-set below if double push\r\n        self.en_passant_sq = None\r\n\r\n        # --- Handle each flag ---\r\n\r\n        if flag == FLAG_EN_PASSANT:\r\n            self.squares[r1][c1] = EMPTY\r\n            self.squares[r2][c2] = moving\r\n            cap_r = r2 + (1 if white else -1)\r\n            self.squares[cap_r][c2] = EMPTY\r\n\r\n        elif flag in PROMOTION_FLAGS:\r\n            promo_piece = PROMOTION_PIECES[flag]\r\n            self.squares[r1][c1] = EMPTY\r\n            self.squares[r2][c2] = promo_piece if white else -promo_piece\r\n\r\n        elif flag == FLAG_CASTLE_KINGSIDE:\r\n            # Move king\r\n            self.squares[r1][c1] = EMPTY\r\n            self.squares[r2][c2] = moving\r\n            # Move rook from h-file to f-file\r\n            rook_col_from = 7\r\n            rook_col_to   = 5\r\n            rook = self.squares[r1][rook_col_from]\r\n            self.squares[r1][rook_col_from] = EMPTY\r\n            self.squares[r1][rook_col_to]   = rook\r\n\r\n        elif flag == FLAG_CASTLE_QUEENSIDE:\r\n            # Move king\r\n            self.squares[r1][c1] = EMPTY\r\n            self.squares[r2][c2] = moving\r\n            # Move rook from a-file to d-file\r\n            rook_col_from = 0\r\n            rook_col_to   = 3\r\n            rook = self.squares[r1][rook_col_from]\r\n            self.squares[r1][rook_col_from] = EMPTY\r\n            self.squares[r1][rook_col_to]   = rook\r\n\r\n        else:\r\n            # Normal move\r\n            self.squares[r1][c1] = EMPTY\r\n            self.squares[r2][c2] = moving\r\n\r\n            # Double pawn push — set en passant target\r\n            if abs(moving) == PAWN and abs(r2 - r1) == 2:\r\n                self.en_passant_sq = ((r1 + r2) // 2, c1)\r\n\r\n        # Update king cache\r\n        if moving == KING:\r\n            self.white_king_pos = (r2, c2)\r\n        elif moving == -KING:\r\n            self.black_king_pos = (r2, c2)\r\n\r\n        # Update castling rights\r\n        # King moves — lose both rights for that side\r\n        if moving == KING:\r\n            self.castle_wk = False\r\n            self.castle_wq = False\r\n        elif moving == -KING:\r\n            self.castle_bk = False\r\n            self.castle_bq = False\r\n\r\n        # Rook moves or is captured — lose the relevant right\r\n        if r1 == 7 and c1 == 7: self.castle_wk = False\r\n        if r1 == 7 and c1 == 0: self.castle_wq = False\r\n        if r1 == 0 and c1 == 7: self.castle_bk = False\r\n        if r1 == 0 and c1 == 0: self.castle_bq = False\r\n\r\n        # Rook captured on its starting square\r\n        if r2 == 7 and c2 == 7: self.castle_wk = False\r\n        if r2 == 7 and c2 == 0: self.castle_wq = False\r\n        if r2 == 0 and c2 == 7: self.castle_bk = False\r\n        if r2 == 0 and c2 == 0: self.castle_bq = False\r\n\r\n        self.white_to_move = not self.white_to_move\r\n\r\n    def undo_move(self):\r\n        (move, captured,\r\n         wkr, wkc, bkr, bkc,\r\n         white_to_move,\r\n         ep_r, ep_c,\r\n         castle_wk, castle_wq,\r\n         castle_bk, castle_bq) = self.move_stack.pop()\r\n\r\n        r1, c1, r2, c2, flag = decode_move(move)\r\n        white = white_to_move\r\n\r\n        if flag == FLAG_EN_PASSANT:\r\n            self.squares[r1][c1] = PAWN if white else -PAWN\r\n            self.squares[r2][c2] = EMPTY\r\n            cap_r = r2 + (1 if white else -1)\r\n            self.squares[cap_r][c2] = -PAWN if white else PAWN\r\n\r\n        elif flag in PROMOTION_FLAGS:\r\n            self.squares[r1][c1] = PAWN if white else -PAWN\r\n            self.squares[r2][c2] = captured\r\n\r\n        elif flag == FLAG_CASTLE_KINGSIDE:\r\n            # Restore king\r\n            self.squares[r1][c1] = KING if white else -KING\r\n            self.squares[r2][c2] = EMPTY\r\n            # Restore rook\r\n            rook = ROOK if white else -ROOK\r\n            self.squares[r1][5] = EMPTY\r\n            self.squares[r1][7] = rook\r\n\r\n        elif flag == FLAG_CASTLE_QUEENSIDE:\r\n            # Restore king\r\n            self.squares[r1][c1] = KING if white else -KING\r\n            self.squares[r2][c2] = EMPTY\r\n            # Restore rook\r\n            rook = ROOK if white else -ROOK\r\n            self.squares[r1][3] = EMPTY\r\n            self.squares[r1][0] = rook\r\n\r\n        else:\r\n            self.squares[r1][c1] = self.squares[r2][c2]\r\n            self.squares[r2][c2] = captured\r\n\r\n        # Restore all saved state\r\n        self.white_king_pos = (wkr, wkc)\r\n        self.black_king_pos = (bkr, bkc)\r\n        self.white_to_move  = white_to_move\r\n        self.en_passant_sq  = (ep_r, ep_c) if ep_r != -1 else None\r\n        self.castle_wk      = castle_wk\r\n        self.castle_wq      = castle_wq\r\n        self.castle_bk      = castle_bk\r\n        self.castle_bq      = castle_bq\r\n\r\n    # ==========================================\r\n    # King Helpers\r\n    # ==========================================\r\n\r\n    def get_king_position(self, white):\r\n        return self.white_king_pos if white else self.black_king_pos\r\n\r\n    def is_in_check(self, white):\r\n        return self.is_square_attacked(self.get_king_position(white), not white)\r\n\r\n    # ==========================================\r\n    # Attack Detection\r\n    # ==========================================\r\n\r\n    def is_square_attacked(self, square, by_white):\r\n        r, c = square\r\n\r\n        # Pawns\r\n        direction = 1 if by_white else -1\r\n        for dc in (-1, 1):\r\n            rr, cc = r + direction, c + dc\r\n            if 0 <= rr < 8 and 0 <= cc < 8:\r\n                if self.squares[rr][cc] == (PAWN if by_white else -PAWN):\r\n                    return True\r\n\r\n        # Knights\r\n        for dr, dc in KNIGHT_OFFSETS:\r\n            rr, cc = r + dr, c + dc\r\n            if 0 <= rr < 8 and 0 <= cc < 8:\r\n                if self.squares[rr][cc] == (KNIGHT if by_white else -KNIGHT):\r\n                    return True\r\n\r\n        # King\r\n        for dr, dc in KING_OFFSETS:\r\n            rr, cc = r + dr, c + dc\r\n            if 0 <= rr < 8 and 0 <= cc < 8:\r\n                if self.squares[rr][cc] == (KING if by_white else -KING):\r\n                    return True\r\n\r\n        # Rooks / Queens (straight lines)\r\n        for dr, dc in ROOK_DIRS:\r\n            rr, cc = r + dr, c + dc\r\n            while 0 <= rr < 8 and 0 <= cc < 8:\r\n                piece = self.squares[rr][cc]\r\n                if piece != EMPTY:\r\n                    if by_white and piece in (ROOK, QUEEN):   return True\r\n                    if not by_white and piece in (-ROOK, -QUEEN): return True\r\n                    break\r\n                rr += dr; cc += dc\r\n\r\n        # Bishops / Queens (diagonals)\r\n        for dr, dc in BISHOP_DIRS:\r\n            rr, cc = r + dr, c + dc\r\n            while 0 <= rr < 8 and 0 <= cc < 8:\r\n                piece = self.squares[rr][cc]\r\n                if piece != EMPTY:\r\n                    if by_white and piece in (BISHOP, QUEEN):   return True\r\n                    if not by_white and piece in (-BISHOP, -QUEEN): return True\r\n                    break\r\n                rr += dr; cc += dc\r\n\r\n        return False\r\n\r\n    # ==========================================\r\n    # Display\r\n    # ==========================================\r\n\r\n    def __str__(self):\r\n        result = \"  ╔═════════════════════════════╗\\n\"\r\n\r\n        for r in range(8):\r\n            result += str(8 - r) + \" ║\"\r\n\r\n            for c in range(8):\r\n                piece = self.squares[r][c]\r\n                symbol = PIECE_SYMBOLS[piece]\r\n\r\n                # Simple square coloring\r\n                if (r + c) % 2 == 0:\r\n                    result += f\"[{symbol}]\"\r\n                else:\r\n                    result += f\" {symbol} \"\r\n\r\n            result += \"║\\n\"\r\n\r\n        result += \"  ╚═════════════════════════════╝\\n\"\r\n        result += \"    a  b  c  d  e  f  g  h\\n\"\r\n\r\n        if self.white_to_move:\r\n            result += \"White to move\\n\"\r\n        else:\r\n            result += \"Black to move\\n\"\r\n\r\n        return result
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/board.py b/board.py
+--- a/board.py	(revision 2a62d3a76087cda0d43f65a4c2d73251845fe9ec)
++++ b/board.py	(date 1772431188814)
+@@ -285,29 +285,13 @@
+     # ==========================================
+ 
+     def __str__(self):
+-        result = "  ╔═════════════════════════════╗\n"
+-
++        rows = []
+         for r in range(8):
+-            result += str(8 - r) + " ║"
+-
++            row = str(8 - r) + "  "
+             for c in range(8):
+-                piece = self.squares[r][c]
+-                symbol = PIECE_SYMBOLS[piece]
+-
+-                # Simple square coloring
+-                if (r + c) % 2 == 0:
+-                    result += f"[{symbol}]"
+-                else:
+-                    result += f" {symbol} "
+-
+-            result += "║\n"
+-
+-        result += "  ╚═════════════════════════════╝\n"
+-        result += "    a  b  c  d  e  f  g  h\n"
++                symbol = PIECE_SYMBOLS[self.squares[r][c]]
++                row += f"[{symbol}]" if (r + c) % 2 == 0 else f" {symbol} "
++            rows.append(row)
+ 
+-        if self.white_to_move:
+-            result += "White to move\n"
+-        else:
+-            result += "Black to move\n"
+-
+-        return result
+\ No newline at end of file
++        turn = "White to move" if self.white_to_move else "Black to move"
++        return "\n" + "\n".join(rows) + "\n    a  b  c  d  e  f  g  h\n" + turn + "\n"
+\ No newline at end of file
+Index: constants.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+># ==========================================\r\n# Piece Types\r\n# ==========================================\r\n\r\nEMPTY  = 0\r\nPAWN   = 1\r\nKNIGHT = 2\r\nBISHOP = 3\r\nROOK   = 4\r\nQUEEN  = 5\r\nKING   = 6\r\n\r\nWHITE = True\r\nBLACK = False\r\n\r\n# ==========================================\r\n# Move Flags  (bits 12-14 of encoded move)\r\n# ==========================================\r\n\r\nFLAG_NORMAL           = 0\r\nFLAG_EN_PASSANT       = 1\r\nFLAG_PROMOTE_QUEEN    = 2\r\nFLAG_PROMOTE_ROOK     = 3\r\nFLAG_PROMOTE_BISHOP   = 4\r\nFLAG_PROMOTE_KNIGHT   = 5\r\nFLAG_CASTLE_KINGSIDE  = 6  # reserved\r\nFLAG_CASTLE_QUEENSIDE = 7  # reserved\r\n\r\nPROMOTION_FLAGS = (FLAG_PROMOTE_QUEEN, FLAG_PROMOTE_ROOK,\r\n                   FLAG_PROMOTE_BISHOP, FLAG_PROMOTE_KNIGHT)\r\n\r\nPROMOTION_PIECES = {\r\n    FLAG_PROMOTE_QUEEN:  QUEEN,\r\n    FLAG_PROMOTE_ROOK:   ROOK,\r\n    FLAG_PROMOTE_BISHOP: BISHOP,\r\n    FLAG_PROMOTE_KNIGHT: KNIGHT,\r\n}\r\n\r\n# ==========================================\r\n# Piece move directions / offsets\r\n# (defined once here, imported everywhere)\r\n# ==========================================\r\n\r\nBISHOP_DIRS  = ((1,1),(1,-1),(-1,1),(-1,-1))\r\nROOK_DIRS    = ((1,0),(-1,0),(0,1),(0,-1))\r\nQUEEN_DIRS   = ROOK_DIRS + BISHOP_DIRS\r\n\r\nKNIGHT_OFFSETS = (\r\n    (2,1),(2,-1),(-2,1),(-2,-1),\r\n    (1,2),(1,-2),(-1,2),(-1,-2)\r\n)\r\n\r\nKING_OFFSETS = (\r\n    (-1,-1),(-1,0),(-1,1),\r\n    ( 0,-1),       ( 0,1),\r\n    ( 1,-1),( 1,0),( 1,1)\r\n)\r\n\r\nPIECE_SYMBOLS = {\r\n        -1: \"♙\", 1: \"♟\",\r\n        -2: \"♘\", 2: \"♞\",\r\n        -3: \"♗\", 3: \"♝\",\r\n        -4: \"♖\", 4: \"♜\",\r\n        -5: \"♕\", 5: \"♛\",\r\n        -6: \"♔\", 6: \"♚\",\r\n        0: \" \"\r\n    }\r\n\r\n# ==========================================\r\n# Instructions\r\n# ==========================================\r\n\r\ninstructions = \"\"\"\r\n================Chess================\r\nMost rules implemented\r\n-No castling (not yet decided)\r\n-No 3-fold move repetition\r\n-No 50-move rule\r\n-Stalemate draws\r\n\r\nType in moves as startend\r\nExample: e2e4 or d5e3\r\n\"\"\"\r\n\r\n# ==========================================\r\n# Piece Values\r\n# ==========================================\r\n\r\nPIECE_VALUES = {\r\n    PAWN:   100,\r\n    KNIGHT: 320,\r\n    BISHOP: 330,\r\n    ROOK:   500,\r\n    QUEEN:  900,\r\n    KING:   0\r\n}\r\n\r\nPIECE_DICT = {\r\n    PAWN:   \"Pawn\",\r\n    KNIGHT: \"Knight\",\r\n    BISHOP: \"Bishop\",\r\n    ROOK:   \"Rook\",\r\n    QUEEN:  \"Queen\",\r\n    KING:   \"King\"\r\n}\r\n\r\n# ==========================================\r\n# Piece-Square Tables\r\n# ==========================================\r\n\r\nPAWN_TABLE = [\r\n[  0,  0,  0,  0,  0,  0,  0,  0],\r\n[ 50, 50, 50, 50, 50, 50, 50, 50],\r\n[ 10, 10, 20, 30, 30, 20, 10, 10],\r\n[  5,  5, 10, 25, 25, 10,  5,  5],\r\n[  0,  0,  0, 20, 20,  0,  0,  0],\r\n[  5, -5,-10,  0,  0,-10, -5,  5],\r\n[  5, 10, 10,-20,-20, 10, 10,  5],\r\n[  0,  0,  0,  0,  0,  0,  0,  0]\r\n]\r\n\r\nKNIGHT_TABLE = [\r\n[-50,-40,-30,-30,-30,-30,-40,-50],\r\n[-40,-20,  0,  5,  5,  0,-20,-40],\r\n[-30,  5, 10, 15, 15, 10,  5,-30],\r\n[-30,  0, 15, 20, 20, 15,  0,-30],\r\n[-30,  5, 15, 20, 20, 15,  5,-30],\r\n[-30,  0, 10, 15, 15, 10,  0,-30],\r\n[-40,-20,  0,  0,  0,  0,-20,-40],\r\n[-50,-40,-30,-30,-30,-30,-40,-50]\r\n]\r\n\r\nBISHOP_TABLE = [\r\n[-20,-10,-10,-10,-10,-10,-10,-20],\r\n[-10,  5,  0,  0,  0,  0,  5,-10],\r\n[-10, 10, 10, 10, 10, 10, 10,-10],\r\n[-10,  0, 10, 10, 10, 10,  0,-10],\r\n[-10,  5,  5, 10, 10,  5,  5,-10],\r\n[-10,  0,  5, 10, 10,  5,  0,-10],\r\n[-10,  0,  0,  0,  0,  0,  0,-10],\r\n[-20,-10,-10,-10,-10,-10,-10,-20]\r\n]\r\n\r\nROOK_TABLE = [\r\n[  0,  0,  0,  5,  5,  0,  0,  0],\r\n[ -5,  0,  0,  0,  0,  0,  0, -5],\r\n[ -5,  0,  0,  0,  0,  0,  0, -5],\r\n[ -5,  0,  0,  0,  0,  0,  0, -5],\r\n[ -5,  0,  0,  0,  0,  0,  0, -5],\r\n[ -5,  0,  0,  0,  0,  0,  0, -5],\r\n[  5, 10, 10, 10, 10, 10, 10,  5],\r\n[  0,  0,  0,  0,  0,  0,  0,  0]\r\n]\r\n\r\nQUEEN_TABLE = [\r\n[-20,-10,-10, -5, -5,-10,-10,-20],\r\n[-10,  0,  0,  0,  0,  0,  0,-10],\r\n[-10,  5,  5,  5,  5,  5,  0,-10],\r\n[ -5,  0,  5,  5,  5,  5,  0, -5],\r\n[  0,  0,  5,  5,  5,  5,  0, -5],\r\n[-10,  5,  5,  5,  5,  5,  0,-10],\r\n[-10,  0,  0,  0,  0,  0,  0,-10],\r\n[-20,-10,-10, -5, -5,-10,-10,-20]\r\n]\r\n\r\nKING_TABLE = [\r\n[-30,-40,-40,-50,-50,-40,-40,-30],\r\n[-30,-40,-40,-50,-50,-40,-40,-30],\r\n[-30,-40,-40,-50,-50,-40,-40,-30],\r\n[-30,-40,-40,-50,-50,-40,-40,-30],\r\n[-20,-30,-30,-40,-40,-30,-30,-20],\r\n[-10,-20,-20,-20,-20,-20,-20,-10],\r\n[ 20, 20,  0,  0,  0,  0, 20, 20],\r\n[ 20, 30, 10,  0,  0, 10, 30, 20]\r\n]\r\n\r\nKING_END_TABLE = [\r\n[-50,-40,-30,-20,-20,-30,-40,-50],\r\n[-30,-20,-10,  0,  0,-10,-20,-30],\r\n[-30,-10, 20, 30, 30, 20,-10,-30],\r\n[-30,-10, 30, 40, 40, 30,-10,-30],\r\n[-30,-10, 30, 40, 40, 30,-10,-30],\r\n[-30,-10, 20, 30, 30, 20,-10,-30],\r\n[-30,-30,  0,  0,  0,  0,-30,-30],\r\n[-50,-30,-30,-30,-30,-30,-30,-50]\r\n]\r\n\r\n\"\"\"\r\ndef __str__(self):\r\n    piece_symbols = {\r\n        -1: \"♙\", 1: \"♟\",\r\n        -2: \"♘\", 2: \"♞\",\r\n        -3: \"♗\", 3: \"♝\",\r\n        -4: \"♖\", 4: \"♜\",\r\n        -5: \"♕\", 5: \"♛\",\r\n        -6: \"♔\", 6: \"♚\",\r\n        0: \" \"\r\n    }\r\n\r\n    result = \"  ╔═════════════════════════════╗\\n\"\r\n\r\n    for r in range(8):\r\n        result += str(8 - r) + \" ║\"\r\n\r\n        for c in range(8):\r\n            piece = self.squares[r][c]\r\n            symbol = piece_symbols[piece]\r\n\r\n            # Simple square coloring\r\n            if (r + c) % 2 == 0:\r\n                result += f\"[{symbol}]\"\r\n            else:\r\n                result += f\" {symbol} \"\r\n\r\n        result += \"║\\n\"\r\n\r\n    result += \"  ╚═════════════════════════════╝\\n\"\r\n    result += \"    a  b  c  d  e  f  g  h\\n\"\r\n\r\n    if self.white_to_move:\r\n        result += \"White to move\\n\"\r\n    else:\r\n        result += \"Black to move\\n\"\r\n\r\n    return result\r\n\"\"\"
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/constants.py b/constants.py
+--- a/constants.py	(revision 2a62d3a76087cda0d43f65a4c2d73251845fe9ec)
++++ b/constants.py	(date 1772431176061)
+@@ -14,7 +14,7 @@
+ BLACK = False
+ 
+ # ==========================================
+-# Move Flags  (bits 12-14 of encoded move)
++# Move Flags (bits 12-14 of encoded move)
+ # ==========================================
+ 
+ FLAG_NORMAL           = 0
+@@ -23,8 +23,8 @@
+ FLAG_PROMOTE_ROOK     = 3
+ FLAG_PROMOTE_BISHOP   = 4
+ FLAG_PROMOTE_KNIGHT   = 5
+-FLAG_CASTLE_KINGSIDE  = 6  # reserved
+-FLAG_CASTLE_QUEENSIDE = 7  # reserved
++FLAG_CASTLE_KINGSIDE  = 6
++FLAG_CASTLE_QUEENSIDE = 7
+ 
+ PROMOTION_FLAGS = (FLAG_PROMOTE_QUEEN, FLAG_PROMOTE_ROOK,
+                    FLAG_PROMOTE_BISHOP, FLAG_PROMOTE_KNIGHT)
+@@ -37,13 +37,12 @@
+ }
+ 
+ # ==========================================
+-# Piece move directions / offsets
+-# (defined once here, imported everywhere)
++# Directions / Offsets
+ # ==========================================
+ 
+-BISHOP_DIRS  = ((1,1),(1,-1),(-1,1),(-1,-1))
+-ROOK_DIRS    = ((1,0),(-1,0),(0,1),(0,-1))
+-QUEEN_DIRS   = ROOK_DIRS + BISHOP_DIRS
++BISHOP_DIRS = ((1,1),(1,-1),(-1,1),(-1,-1))
++ROOK_DIRS   = ((1,0),(-1,0),(0,1),(0,-1))
++QUEEN_DIRS  = ROOK_DIRS + BISHOP_DIRS
+ 
+ KNIGHT_OFFSETS = (
+     (2,1),(2,-1),(-2,1),(-2,-1),
+@@ -56,16 +55,6 @@
+     ( 1,-1),( 1,0),( 1,1)
+ )
+ 
+-PIECE_SYMBOLS = {
+-        -1: "♙", 1: "♟",
+-        -2: "♘", 2: "♞",
+-        -3: "♗", 3: "♝",
+-        -4: "♖", 4: "♜",
+-        -5: "♕", 5: "♛",
+-        -6: "♔", 6: "♚",
+-        0: " "
+-    }
+-
+ # ==========================================
+ # Instructions
+ # ==========================================
+@@ -73,7 +62,6 @@
+ instructions = """
+ ================Chess================
+ Most rules implemented
+--No castling (not yet decided)
+ -No 3-fold move repetition
+ -No 50-move rule
+ -Stalemate draws
+@@ -104,6 +92,20 @@
+     KING:   "King"
+ }
+ 
++# ==========================================
++# Piece Symbols (shared across all files)
++# ==========================================
++
++PIECE_SYMBOLS = {
++     PAWN: "♟",  -PAWN: "♙",
++   KNIGHT: "♞",-KNIGHT: "♘",
++   BISHOP: "♝",-BISHOP: "♗",
++     ROOK: "♜",   -ROOK: "♖",
++    QUEEN: "♛",  -QUEEN: "♕",
++     KING: "♚",   -KING: "♔",
++    EMPTY: " "
++}
++
+ # ==========================================
+ # Piece-Square Tables
+ # ==========================================
+@@ -183,44 +185,4 @@
+ [-30,-10, 20, 30, 30, 20,-10,-30],
+ [-30,-30,  0,  0,  0,  0,-30,-30],
+ [-50,-30,-30,-30,-30,-30,-30,-50]
+-]
+-
+-"""
+-def __str__(self):
+-    piece_symbols = {
+-        -1: "♙", 1: "♟",
+-        -2: "♘", 2: "♞",
+-        -3: "♗", 3: "♝",
+-        -4: "♖", 4: "♜",
+-        -5: "♕", 5: "♛",
+-        -6: "♔", 6: "♚",
+-        0: " "
+-    }
+-
+-    result = "  ╔═════════════════════════════╗\n"
+-
+-    for r in range(8):
+-        result += str(8 - r) + " ║"
+-
+-        for c in range(8):
+-            piece = self.squares[r][c]
+-            symbol = piece_symbols[piece]
+-
+-            # Simple square coloring
+-            if (r + c) % 2 == 0:
+-                result += f"[{symbol}]"
+-            else:
+-                result += f" {symbol} "
+-
+-        result += "║\n"
+-
+-    result += "  ╚═════════════════════════════╝\n"
+-    result += "    a  b  c  d  e  f  g  h\n"
+-
+-    if self.white_to_move:
+-        result += "White to move\n"
+-    else:
+-        result += "Black to move\n"
+-
+-    return result
+-"""
+\ No newline at end of file
++]
+\ No newline at end of file
+Index: search.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>from constants import *\r\nfrom movegen import generate_legal_moves, decode_move\r\n\r\n# ==========================================\r\n# Evaluation\r\n# ==========================================\r\n\r\ndef evaluate(board):\r\n    material_score   = 0\r\n    positional_score = 0\r\n    total_material   = 0\r\n\r\n    for r in range(8):\r\n        for c in range(8):\r\n            piece = board.squares[r][c]\r\n            if piece == EMPTY:\r\n                continue\r\n\r\n            abs_piece = abs(piece)\r\n            value     = PIECE_VALUES[abs_piece]\r\n\r\n            # Track total non-king material for endgame detection\r\n            if abs_piece != KING:\r\n                total_material += value\r\n\r\n            if piece > 0:\r\n                material_score += value\r\n            else:\r\n                material_score -= value\r\n\r\n            if abs_piece == PAWN:\r\n                table = PAWN_TABLE\r\n            elif abs_piece == KNIGHT:\r\n                table = KNIGHT_TABLE\r\n            elif abs_piece == BISHOP:\r\n                table = BISHOP_TABLE\r\n            elif abs_piece == ROOK:\r\n                table = ROOK_TABLE\r\n            elif abs_piece == QUEEN:\r\n                table = QUEEN_TABLE\r\n            elif abs_piece == KING:\r\n                table = KING_END_TABLE if total_material < 1500 else KING_TABLE\r\n            else:\r\n                continue\r\n\r\n            table_value = table[r][c] if piece > 0 else table[7 - r][c]\r\n\r\n            if piece > 0:\r\n                positional_score += table_value\r\n            else:\r\n                positional_score -= table_value\r\n\r\n    # King distance penalty — when one side is up material,\r\n    # reward the winning side for bringing kings closer together.\r\n    # This helps convert winning endgames.\r\n    king_distance_score = 0\r\n    if total_material < 2000 and material_score != 0:\r\n        wkr, wkc = board.white_king_pos\r\n        bkr, bkc = board.black_king_pos\r\n        king_distance = abs(wkr - bkr) + abs(wkc - bkc)\r\n\r\n        # Winning side wants kings close, losing side wants them far\r\n        if material_score > 0:\r\n            king_distance_score = -king_distance * 5\r\n        else:\r\n            king_distance_score = king_distance * 5\r\n\r\n    return material_score + positional_score + king_distance_score\r\n\r\n\r\n# ==========================================\r\n# Move Ordering\r\n# ==========================================\r\n\r\ndef score_move(board, move):\r\n    r1, c1, r2, c2, flag = decode_move(move)\r\n    moving = board.squares[r1][c1]\r\n    target = board.squares[r2][c2]\r\n\r\n    score = 0\r\n\r\n    # MVV-LVA\r\n    if target != EMPTY:\r\n        victim_value   = PIECE_VALUES[abs(target)]\r\n        attacker_value = PIECE_VALUES[abs(moving)]\r\n        score += 10000 + (victim_value * 10 - attacker_value)\r\n\r\n    # Promotion bonus\r\n    if flag in PROMOTION_FLAGS:\r\n        score += PIECE_VALUES[PROMOTION_PIECES[flag]]\r\n\r\n    return score\r\n\r\n\r\n# ==========================================\r\n# Quiescence Search\r\n# ==========================================\r\n\r\ndef quiescence(board, alpha, beta, qdepth=4):\r\n    if qdepth == 0:\r\n        return evaluate(board)\r\n\r\n    # Stand-pat: the side to move can always choose not to capture\r\n    stand_pat = evaluate(board)\r\n\r\n    if stand_pat >= beta:\r\n        return beta\r\n    if stand_pat > alpha:\r\n        alpha = stand_pat\r\n\r\n    legal_moves = generate_legal_moves(board)\r\n\r\n    # Handle checkmate/stalemate in quiescence\r\n    if not legal_moves:\r\n        if board.is_in_check(board.white_to_move):\r\n            return -99999 if board.white_to_move else 99999\r\n        return 0\r\n\r\n    # Captures only (including en passant)\r\n    captures = [\r\n        m for m in legal_moves\r\n        if board.squares[decode_move(m)[2]][decode_move(m)[3]] != EMPTY\r\n        or decode_move(m)[4] == FLAG_EN_PASSANT\r\n    ]\r\n\r\n    captures.sort(key=lambda m: score_move(board, m), reverse=True)\r\n\r\n    for move in captures:\r\n        board.make_move(move)\r\n        score = -quiescence(board, -beta, -alpha, qdepth - 1)\r\n        board.undo_move()\r\n\r\n        if score >= beta:\r\n            return beta\r\n        if score > alpha:\r\n            alpha = score\r\n\r\n    return alpha\r\n\r\n\r\n# ==========================================\r\n# Minimax with Alpha-Beta Pruning\r\n# ==========================================\r\n\r\ndef minimax(board, depth, alpha, beta):\r\n    if depth == 0:\r\n        return quiescence(board, alpha, beta)\r\n\r\n    legal_moves = generate_legal_moves(board)\r\n\r\n    if not legal_moves:\r\n        if board.is_in_check(board.white_to_move):\r\n            # Prefer faster mates by adding depth to the score\r\n            return -99999 - depth if board.white_to_move else 99999 + depth\r\n        return 0  # Stalemate\r\n\r\n    legal_moves.sort(key=lambda move: score_move(board, move), reverse=True)\r\n\r\n    if board.white_to_move:\r\n        max_score = -float(\"inf\")\r\n        for move in legal_moves:\r\n            board.make_move(move)\r\n            score = minimax(board, depth - 1, alpha, beta)\r\n            board.undo_move()\r\n            if score > max_score:\r\n                max_score = score\r\n            if score > alpha:\r\n                alpha = score\r\n            if beta <= alpha:\r\n                break\r\n        return max_score\r\n\r\n    else:\r\n        min_score = float(\"inf\")\r\n        for move in legal_moves:\r\n            board.make_move(move)\r\n            score = minimax(board, depth - 1, alpha, beta)\r\n            board.undo_move()\r\n            if score < min_score:\r\n                min_score = score\r\n            if score < beta:\r\n                beta = score\r\n            if beta <= alpha:\r\n                break\r\n        return min_score\r\n\r\n\r\n# ==========================================\r\n# Root Search\r\n# ==========================================\r\n\r\ndef find_best_move(board, depth):\r\n    legal_moves = generate_legal_moves(board)\r\n\r\n    if not legal_moves:\r\n        return None\r\n\r\n    legal_moves.sort(key=lambda move: score_move(board, move), reverse=True)\r\n\r\n    best_move  = legal_moves[0]\r\n    alpha      = -float(\"inf\")\r\n    beta       =  float(\"inf\")\r\n\r\n    if board.white_to_move:\r\n        best_score = -float(\"inf\")\r\n        for move in legal_moves:\r\n            board.make_move(move)\r\n            score = minimax(board, depth - 1, alpha, beta)\r\n            board.undo_move()\r\n            if score > best_score:\r\n                best_score = score\r\n                best_move  = move\r\n            alpha = max(alpha, score)\r\n    else:\r\n        best_score = float(\"inf\")\r\n        for move in legal_moves:\r\n            board.make_move(move)\r\n            score = minimax(board, depth - 1, alpha, beta)\r\n            board.undo_move()\r\n            if score < best_score:\r\n                best_score = score\r\n                best_move  = move\r\n            beta = min(beta, score)\r\n\r\n    return best_move
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/search.py b/search.py
+--- a/search.py	(revision 2a62d3a76087cda0d43f65a4c2d73251845fe9ec)
++++ b/search.py	(date 1772431203754)
+@@ -1,5 +1,5 @@
+ from constants import *
+-from movegen import generate_legal_moves, decode_move
++from movegen import generate_legal_moves, decode_move, move_to_string
+ 
+ # ==========================================
+ # Evaluation
+@@ -19,7 +19,6 @@
+             abs_piece = abs(piece)
+             value     = PIECE_VALUES[abs_piece]
+ 
+-            # Track total non-king material for endgame detection
+             if abs_piece != KING:
+                 total_material += value
+ 
+@@ -50,22 +49,25 @@
+             else:
+                 positional_score -= table_value
+ 
+-    # King distance penalty — when one side is up material,
+-    # reward the winning side for bringing kings closer together.
+-    # This helps convert winning endgames.
++    # Check penalty
++    check_penalty = 0
++    if board.is_in_check(True):
++        check_penalty -= 50
++    if board.is_in_check(False):
++        check_penalty += 50
++
++    # King distance penalty in endgame
+     king_distance_score = 0
+     if total_material < 2000 and material_score != 0:
+         wkr, wkc = board.white_king_pos
+         bkr, bkc = board.black_king_pos
+         king_distance = abs(wkr - bkr) + abs(wkc - bkc)
+-
+-        # Winning side wants kings close, losing side wants them far
+         if material_score > 0:
+             king_distance_score = -king_distance * 5
+         else:
+             king_distance_score = king_distance * 5
+ 
+-    return material_score + positional_score + king_distance_score
++    return material_score + positional_score + check_penalty + king_distance_score
+ 
+ 
+ # ==========================================
+@@ -96,13 +98,16 @@
+ # Quiescence Search
+ # ==========================================
+ 
+-def quiescence(board, alpha, beta, qdepth=4):
++def quiescence(board, alpha, beta, qdepth=3):
+     if qdepth == 0:
+         return evaluate(board)
+ 
+-    # Stand-pat: the side to move can always choose not to capture
+     stand_pat = evaluate(board)
+ 
++    # Delta pruning — if even capturing a queen can't raise alpha, bail out
++    if stand_pat + 900 < alpha:
++        return alpha
++
+     if stand_pat >= beta:
+         return beta
+     if stand_pat > alpha:
+@@ -110,7 +115,7 @@
+ 
+     legal_moves = generate_legal_moves(board)
+ 
+-    # Handle checkmate/stalemate in quiescence
++    # Handle checkmate/stalemate inside quiescence
+     if not legal_moves:
+         if board.is_in_check(board.white_to_move):
+             return -99999 if board.white_to_move else 99999
+@@ -150,7 +155,6 @@
+ 
+     if not legal_moves:
+         if board.is_in_check(board.white_to_move):
+-            # Prefer faster mates by adding depth to the score
+             return -99999 - depth if board.white_to_move else 99999 + depth
+         return 0  # Stalemate
+ 
+@@ -186,40 +190,55 @@
+ 
+ 
+ # ==========================================
+-# Root Search
++# Root Search with Iterative Deepening
+ # ==========================================
+ 
+-def find_best_move(board, depth):
+-    legal_moves = generate_legal_moves(board)
++def find_best_move(board, max_depth):
++    best_move = None
++
++    for depth in range(1, max_depth + 1):
++        legal_moves = generate_legal_moves(board)
+ 
+-    if not legal_moves:
+-        return None
++        if not legal_moves:
++            return None
+ 
+-    legal_moves.sort(key=lambda move: score_move(board, move), reverse=True)
++        # Put previous best move first to improve ordering at this depth
++        if best_move is not None and best_move in legal_moves:
++            legal_moves.remove(best_move)
++            legal_moves.insert(0, best_move)
+ 
+-    best_move  = legal_moves[0]
+-    alpha      = -float("inf")
+-    beta       =  float("inf")
++        # Sort remaining moves by score, keeping best move at front
++        legal_moves[1:] = sorted(
++            legal_moves[1:],
++            key=lambda m: score_move(board, m),
++            reverse=True
++        )
++
++        alpha     = -float("inf")
++        beta      =  float("inf")
++        best_move = legal_moves[0]
+ 
+-    if board.white_to_move:
+-        best_score = -float("inf")
+-        for move in legal_moves:
+-            board.make_move(move)
+-            score = minimax(board, depth - 1, alpha, beta)
+-            board.undo_move()
+-            if score > best_score:
+-                best_score = score
+-                best_move  = move
+-            alpha = max(alpha, score)
+-    else:
+-        best_score = float("inf")
+-        for move in legal_moves:
+-            board.make_move(move)
+-            score = minimax(board, depth - 1, alpha, beta)
+-            board.undo_move()
+-            if score < best_score:
+-                best_score = score
+-                best_move  = move
+-            beta = min(beta, score)
++        if board.white_to_move:
++            best_score = -float("inf")
++            for move in legal_moves:
++                board.make_move(move)
++                score = minimax(board, depth - 1, alpha, beta)
++                board.undo_move()
++                if score > best_score:
++                    best_score = score
++                    best_move  = move
++                alpha = max(alpha, score)
++        else:
++            best_score = float("inf")
++            for move in legal_moves:
++                board.make_move(move)
++                score = minimax(board, depth - 1, alpha, beta)
++                board.undo_move()
++                if score < best_score:
++                    best_score = score
++                    best_move  = move
++                beta = min(beta, score)
+ 
++        print(f"  depth {depth} → score {best_score:+d} best: {move_to_string(best_move, board)}")
++
+     return best_move
+\ No newline at end of file
+Index: main.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>from board import Board\r\nfrom movegen import generate_legal_moves, encode_move, decode_move, move_to_string\r\nfrom search import find_best_move\r\nfrom constants import *\r\n\r\nDEPTH = 3\r\n\r\ndef parse_move(move_str):\r\n    from_col = ord(move_str[0]) - ord('a')\r\n    from_row = 8 - int(move_str[1])\r\n    to_col   = ord(move_str[2]) - ord('a')\r\n    to_row   = 8 - int(move_str[3])\r\n    return encode_move(from_row, from_col, to_row, to_col)\r\n\r\nboard = Board()\r\nboard.setup_starting_position()\r\n\r\nwhile True:\r\n    print(board)\r\n\r\n    legal_moves = generate_legal_moves(board)\r\n\r\n    if not legal_moves:\r\n        if board.is_in_check(board.white_to_move):\r\n            winner = \"Black\" if board.white_to_move else \"White\"\r\n            print(f\"Checkmate! {winner} wins.\")\r\n        else:\r\n            print(\"Stalemate! It's a draw.\")\r\n        break\r\n\r\n    if board.white_to_move:\r\n        move_input = input(\"Your move (e2e4): \")\r\n\r\n        if len(move_input) != 4:\r\n            print(\"Invalid format.\")\r\n            continue\r\n\r\n        move = parse_move(move_input)\r\n        r1, c1, r2, c2, flag = decode_move(move)\r\n\r\n        # Promotion\r\n        if abs(board.squares[r1][c1]) == PAWN and r2 == (0 if board.white_to_move else 7):\r\n            while True:\r\n                promo_input = input(\"Promote to (q/r/b/n): \").lower()\r\n                if promo_input in (\"q\", \"r\", \"b\", \"n\"):\r\n                    break\r\n            flag = {\"q\": FLAG_PROMOTE_QUEEN, \"r\": FLAG_PROMOTE_ROOK,\r\n                    \"b\": FLAG_PROMOTE_BISHOP, \"n\": FLAG_PROMOTE_KNIGHT}[promo_input]\r\n            move = encode_move(r1, c1, r2, c2, flag)\r\n\r\n        # En passant flag fix\r\n        elif (abs(board.squares[r1][c1]) == PAWN\r\n                and board.en_passant_sq is not None\r\n                and (r2, c2) == board.en_passant_sq):\r\n            move = encode_move(r1, c1, r2, c2, FLAG_EN_PASSANT)\r\n\r\n        # Castling flag fix — player types e1g1 or e1c1\r\n        elif abs(board.squares[r1][c1]) == KING and abs(c2 - c1) == 2:\r\n            if c2 > c1:\r\n                move = encode_move(r1, c1, r2, c2, FLAG_CASTLE_KINGSIDE)\r\n            else:\r\n                move = encode_move(r1, c1, r2, c2, FLAG_CASTLE_QUEENSIDE)\r\n\r\n        if move not in legal_moves:\r\n            print(\"Illegal move.\")\r\n            continue\r\n\r\n        board.make_move(move)\r\n\r\n    else:\r\n        print(\"Bot thinking...\")\r\n        best_move = find_best_move(board, DEPTH)\r\n        print(move_to_string(best_move, board))\r\n        board.make_move(best_move)
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/main.py b/main.py
+--- a/main.py	(revision 2a62d3a76087cda0d43f65a4c2d73251845fe9ec)
++++ b/main.py	(date 1772431236267)
+@@ -3,7 +3,7 @@
+ from search import find_best_move
+ from constants import *
+ 
+-DEPTH = 3
++DEPTH = 4
+ 
+ def parse_move(move_str):
+     from_col = ord(move_str[0]) - ord('a')
+Index: .idea/workspace.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+><?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<project version=\"4\">\r\n  <component name=\"AutoImportSettings\">\r\n    <option name=\"autoReloadType\" value=\"SELECTIVE\" />\r\n  </component>\r\n  <component name=\"ChangeListManager\">\r\n    <list default=\"true\" id=\"e0221be7-4605-45b7-9661-e0a3e8255030\" name=\"Changes\" comment=\"En-Passant Working\">\r\n      <change beforePath=\"$PROJECT_DIR$/search.py\" beforeDir=\"false\" afterPath=\"$PROJECT_DIR$/search.py\" afterDir=\"false\" />\r\n    </list>\r\n    <option name=\"SHOW_DIALOG\" value=\"false\" />\r\n    <option name=\"HIGHLIGHT_CONFLICTS\" value=\"true\" />\r\n    <option name=\"HIGHLIGHT_NON_ACTIVE_CHANGELIST\" value=\"false\" />\r\n    <option name=\"LAST_RESOLUTION\" value=\"IGNORE\" />\r\n  </component>\r\n  <component name=\"FileTemplateManagerImpl\">\r\n    <option name=\"RECENT_TEMPLATES\">\r\n      <list>\r\n        <option value=\"Python Script\" />\r\n      </list>\r\n    </option>\r\n  </component>\r\n  <component name=\"Git.Settings\">\r\n    <option name=\"RECENT_BRANCH_BY_REPOSITORY\">\r\n      <map>\r\n        <entry key=\"$PROJECT_DIR$\" value=\"master\" />\r\n      </map>\r\n    </option>\r\n    <option name=\"RECENT_GIT_ROOT_PATH\" value=\"$PROJECT_DIR$\" />\r\n  </component>\r\n  <component name=\"GitHubPullRequestSearchHistory\">{\r\n  &quot;lastFilter&quot;: {\r\n    &quot;state&quot;: &quot;OPEN&quot;,\r\n    &quot;assignee&quot;: &quot;varunanand2006&quot;\r\n  }\r\n}</component>\r\n  <component name=\"GithubPullRequestsUISettings\">{\r\n  &quot;selectedUrlAndAccountId&quot;: {\r\n    &quot;url&quot;: &quot;https://github.com/varunanand2006/ChessV2.git&quot;,\r\n    &quot;accountId&quot;: &quot;45bb7a81-7b07-457b-99d9-3a22bcbb4cd4&quot;\r\n  }\r\n}</component>\r\n  <component name=\"ProblemsViewState\">\r\n    <option name=\"selectedTabId\" value=\"QODANA_PROBLEMS_VIEW_TAB\" />\r\n  </component>\r\n  <component name=\"ProjectColorInfo\">{\r\n  &quot;associatedIndex&quot;: 5\r\n}</component>\r\n  <component name=\"ProjectId\" id=\"3A8VCciyjNdKeBa2vc9mVZd2rX2\" />\r\n  <component name=\"ProjectViewState\">\r\n    <option name=\"hideEmptyMiddlePackages\" value=\"true\" />\r\n    <option name=\"showLibraryContents\" value=\"true\" />\r\n  </component>\r\n  <component name=\"PropertiesComponent\">{\r\n  &quot;keyToString&quot;: {\r\n    &quot;ASKED_SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,\r\n    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,\r\n    &quot;Python.board.executor&quot;: &quot;Run&quot;,\r\n    &quot;Python.main.executor&quot;: &quot;Run&quot;,\r\n    &quot;Python.movegen.executor&quot;: &quot;Run&quot;,\r\n    &quot;Python.search.executor&quot;: &quot;Run&quot;,\r\n    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,\r\n    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,\r\n    &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,\r\n    &quot;git-widget-placeholder&quot;: &quot;special__moves&quot;\r\n  }\r\n}</component>\r\n  <component name=\"SharedIndexes\">\r\n    <attachedChunks>\r\n      <set>\r\n        <option value=\"bundled-python-sdk-7bb8055f9097-cbfc7b97e6b2-com.jetbrains.pycharm.community.sharedIndexes.bundled-PC-252.28238.29\" />\r\n      </set>\r\n    </attachedChunks>\r\n  </component>\r\n  <component name=\"TaskManager\">\r\n    <task active=\"true\" id=\"Default\" summary=\"Default task\">\r\n      <changelist id=\"e0221be7-4605-45b7-9661-e0a3e8255030\" name=\"Changes\" comment=\"\" />\r\n      <created>1771974057511</created>\r\n      <option name=\"number\" value=\"Default\" />\r\n      <option name=\"presentableId\" value=\"Default\" />\r\n      <updated>1771974057511</updated>\r\n    </task>\r\n    <task id=\"LOCAL-00001\" summary=\"Initial Commit\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1771976626870</created>\r\n      <option name=\"number\" value=\"00001\" />\r\n      <option name=\"presentableId\" value=\"LOCAL-00001\" />\r\n      <option name=\"project\" value=\"LOCAL\" />\r\n      <updated>1771976626870</updated>\r\n    </task>\r\n    <task id=\"LOCAL-00002\" summary=\"Minimax Prototype\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1772003637020</created>\r\n      <option name=\"number\" value=\"00002\" />\r\n      <option name=\"presentableId\" value=\"LOCAL-00002\" />\r\n      <option name=\"project\" value=\"LOCAL\" />\r\n      <updated>1772003637020</updated>\r\n    </task>\r\n    <task id=\"LOCAL-00003\" summary=\"Fixed Minimax\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1772084341615</created>\r\n      <option name=\"number\" value=\"00003\" />\r\n      <option name=\"presentableId\" value=\"LOCAL-00003\" />\r\n      <option name=\"project\" value=\"LOCAL\" />\r\n      <updated>1772084341615</updated>\r\n    </task>\r\n    <task id=\"LOCAL-00004\" summary=\"Added Move Scoring\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1772177181874</created>\r\n      <option name=\"number\" value=\"00004\" />\r\n      <option name=\"presentableId\" value=\"LOCAL-00004\" />\r\n      <option name=\"project\" value=\"LOCAL\" />\r\n      <updated>1772177181874</updated>\r\n    </task>\r\n    <task id=\"LOCAL-00005\" summary=\"Attempted to add en-passant and castling\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1772253047582</created>\r\n      <option name=\"number\" value=\"00005\" />\r\n      <option name=\"presentableId\" value=\"LOCAL-00005\" />\r\n      <option name=\"project\" value=\"LOCAL\" />\r\n      <updated>1772253047582</updated>\r\n    </task>\r\n    <task id=\"LOCAL-00006\" summary=\"Attempted to add en-passant and castling\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1772390471934</created>\r\n      <option name=\"number\" value=\"00006\" />\r\n      <option name=\"presentableId\" value=\"LOCAL-00006\" />\r\n      <option name=\"project\" value=\"LOCAL\" />\r\n      <updated>1772390471934</updated>\r\n    </task>\r\n    <task id=\"LOCAL-00007\" summary=\"Auto-Queen Promotions\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1772422441543</created>\r\n      <option name=\"number\" value=\"00007\" />\r\n      <option name=\"presentableId\" value=\"LOCAL-00007\" />\r\n      <option name=\"project\" value=\"LOCAL\" />\r\n      <updated>1772422441543</updated>\r\n    </task>\r\n    <task id=\"LOCAL-00008\" summary=\"Promotions Working\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1772422715358</created>\r\n      <option name=\"number\" value=\"00008\" />\r\n      <option name=\"presentableId\" value=\"LOCAL-00008\" />\r\n      <option name=\"project\" value=\"LOCAL\" />\r\n      <updated>1772422715358</updated>\r\n    </task>\r\n    <task id=\"LOCAL-00009\" summary=\"En-Passant Working\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1772424085465</created>\r\n      <option name=\"number\" value=\"00009\" />\r\n      <option name=\"presentableId\" value=\"LOCAL-00009\" />\r\n      <option name=\"project\" value=\"LOCAL\" />\r\n      <updated>1772424085465</updated>\r\n    </task>\r\n    <option name=\"localTasksCounter\" value=\"10\" />\r\n    <servers />\r\n  </component>\r\n  <component name=\"VcsManagerConfiguration\">\r\n    <MESSAGE value=\"Initial Commit\" />\r\n    <MESSAGE value=\"Minimax Prototype\" />\r\n    <MESSAGE value=\"Fixed Minimax\" />\r\n    <MESSAGE value=\"Added Move Scoring\" />\r\n    <MESSAGE value=\"Attempted to add en-passant and castling\" />\r\n    <MESSAGE value=\"Starting anew with Claude\" />\r\n    <MESSAGE value=\"Auto-Queen Promotions\" />\r\n    <MESSAGE value=\"Promotions Working\" />\r\n    <MESSAGE value=\"En-Passant Working\" />\r\n    <option name=\"LAST_COMMIT_MESSAGE\" value=\"En-Passant Working\" />\r\n  </component>\r\n</project>
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/workspace.xml b/.idea/workspace.xml
+--- a/.idea/workspace.xml	(revision 2a62d3a76087cda0d43f65a4c2d73251845fe9ec)
++++ b/.idea/workspace.xml	(date 1772431388758)
+@@ -5,6 +5,10 @@
+   </component>
+   <component name="ChangeListManager">
+     <list default="true" id="e0221be7-4605-45b7-9661-e0a3e8255030" name="Changes" comment="En-Passant Working">
++      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/board.py" beforeDir="false" afterPath="$PROJECT_DIR$/board.py" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/constants.py" beforeDir="false" afterPath="$PROJECT_DIR$/constants.py" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
+       <change beforePath="$PROJECT_DIR$/search.py" beforeDir="false" afterPath="$PROJECT_DIR$/search.py" afterDir="false" />
+     </list>
+     <option name="SHOW_DIALOG" value="false" />
+@@ -153,6 +157,17 @@
+     </task>
+     <option name="localTasksCounter" value="10" />
+     <servers />
++  </component>
++  <component name="Vcs.Log.Tabs.Properties">
++    <option name="TAB_STATES">
++      <map>
++        <entry key="MAIN">
++          <value>
++            <State />
++          </value>
++        </entry>
++      </map>
++    </option>
+   </component>
+   <component name="VcsManagerConfiguration">
+     <MESSAGE value="Initial Commit" />

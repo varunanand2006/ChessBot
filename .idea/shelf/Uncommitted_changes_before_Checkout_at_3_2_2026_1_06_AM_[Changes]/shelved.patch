@@ -1,0 +1,19 @@
+Index: main.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>from board import Board\r\nfrom movegen import generate_legal_moves, encode_move, decode_move, move_to_string\r\nfrom search import find_best_move\r\nfrom constants import *\r\n\r\nDEPTH = 3\r\n\r\ndef parse_move(move_str):\r\n    from_col = ord(move_str[0]) - ord('a')\r\n    from_row = 8 - int(move_str[1])\r\n    to_col   = ord(move_str[2]) - ord('a')\r\n    to_row   = 8 - int(move_str[3])\r\n    return encode_move(from_row, from_col, to_row, to_col)\r\n\r\nboard = Board()\r\nboard.setup_starting_position()\r\n\r\nwhile True:\r\n    print(board)\r\n\r\n    legal_moves = generate_legal_moves(board)\r\n\r\n    if not legal_moves:\r\n        if board.is_in_check(board.white_to_move):\r\n            winner = \"Black\" if board.white_to_move else \"White\"\r\n            print(f\"Checkmate! {winner} wins.\")\r\n        else:\r\n            print(\"Stalemate! It's a draw.\")\r\n        break\r\n\r\n    if board.white_to_move:\r\n        move_input = input(\"Your move (e2e4): \")\r\n\r\n        if len(move_input) != 4:\r\n            print(\"Invalid format.\")\r\n            continue\r\n\r\n        move = parse_move(move_input)\r\n        r1, c1, r2, c2, flag = decode_move(move)\r\n\r\n        # Promotion\r\n        if abs(board.squares[r1][c1]) == PAWN and r2 == (0 if board.white_to_move else 7):\r\n            while True:\r\n                promo_input = input(\"Promote to (q/r/b/n): \").lower()\r\n                if promo_input in (\"q\", \"r\", \"b\", \"n\"):\r\n                    break\r\n            flag = {\"q\": FLAG_PROMOTE_QUEEN, \"r\": FLAG_PROMOTE_ROOK,\r\n                    \"b\": FLAG_PROMOTE_BISHOP, \"n\": FLAG_PROMOTE_KNIGHT}[promo_input]\r\n            move = encode_move(r1, c1, r2, c2, flag)\r\n\r\n        # En passant flag fix\r\n        elif (abs(board.squares[r1][c1]) == PAWN\r\n                and board.en_passant_sq is not None\r\n                and (r2, c2) == board.en_passant_sq):\r\n            move = encode_move(r1, c1, r2, c2, FLAG_EN_PASSANT)\r\n\r\n        # Castling flag fix — player types e1g1 or e1c1\r\n        elif abs(board.squares[r1][c1]) == KING and abs(c2 - c1) == 2:\r\n            if c2 > c1:\r\n                move = encode_move(r1, c1, r2, c2, FLAG_CASTLE_KINGSIDE)\r\n            else:\r\n                move = encode_move(r1, c1, r2, c2, FLAG_CASTLE_QUEENSIDE)\r\n\r\n        if move not in legal_moves:\r\n            print(\"Illegal move.\")\r\n            continue\r\n\r\n        board.make_move(move)\r\n\r\n    else:\r\n        print(\"Bot thinking...\")\r\n        best_move = find_best_move(board, DEPTH)\r\n        print(move_to_string(best_move, board))\r\n        board.make_move(best_move)
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/main.py b/main.py
+--- a/main.py	(revision 171d10f93714c8eb6b5a1634dce58f2bedd4ead3)
++++ b/main.py	(date 1772431528902)
+@@ -3,7 +3,7 @@
+ from search import find_best_move
+ from constants import *
+ 
+-DEPTH = 3
++DEPTH = 4
+ 
+ def parse_move(move_str):
+     from_col = ord(move_str[0]) - ord('a')
