@@ -15,7 +15,7 @@ def parse_move(move_str):
 board = Board()
 board.setup_starting_position()
 
-"""
+#"""
 for i in range (0, 8):
     board.squares[1][i] = 0
 board.squares[0][0] = 0
@@ -25,7 +25,7 @@ board.squares[0][3] = 0
 board.squares[0][5] = 0
 board.squares[0][6] = 0
 board.squares[0][7] = 0
-"""
+#"""
 
 
 while True:
@@ -54,7 +54,13 @@ while True:
         # Later: replace with input prompt to choose promotion piece
         r1, c1, r2, c2, flag = decode_move(move)
         if abs(board.squares[r1][c1]) == PAWN and r2 == (0 if board.white_to_move else 7):
-            move = encode_move(r1, c1, r2, c2, FLAG_PROMOTE_QUEEN)
+            while True:
+                promo_input = input("Promote to (q/r/b/n): ").lower()
+                flag = {"q": FLAG_PROMOTE_QUEEN, "r": FLAG_PROMOTE_ROOK,
+                        "b": FLAG_PROMOTE_BISHOP, "n": FLAG_PROMOTE_KNIGHT}.get(promo_input, FLAG_PROMOTE_QUEEN)
+                if promo_input == "q" or promo_input == "r" or promo_input == "b" or promo_input == "n":
+                    break
+            move = encode_move(r1, c1, r2, c2, flag)
 
         if move not in legal_moves:
             print("Illegal move.")
