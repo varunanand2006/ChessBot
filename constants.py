@@ -1,17 +1,8 @@
+import random
+
+# ==========================================
 # Piece Types
-
-instructions = """
-================Chess================
-Most rules implemented
--No en-passant, no castling
--No 3-fold move repetition
--No 50-move rule
--Auto-queen on pawn promotion
--Stalemate draws
-
-Type in moves as startend 
-Example: e2e4 or d5e3
-"""
+# ==========================================
 
 EMPTY  = 0
 PAWN   = 1
@@ -24,26 +15,127 @@ KING   = 6
 WHITE = True
 BLACK = False
 
+# ==========================================
+# Move Flags (bits 12-14 of encoded move)
+# ==========================================
+
+FLAG_NORMAL           = 0
+FLAG_EN_PASSANT       = 1
+FLAG_PROMOTE_QUEEN    = 2
+FLAG_PROMOTE_ROOK     = 3
+FLAG_PROMOTE_BISHOP   = 4
+FLAG_PROMOTE_KNIGHT   = 5
+FLAG_CASTLE_KINGSIDE  = 6
+FLAG_CASTLE_QUEENSIDE = 7
+
+PROMOTION_FLAGS = (FLAG_PROMOTE_QUEEN, FLAG_PROMOTE_ROOK,
+                   FLAG_PROMOTE_BISHOP, FLAG_PROMOTE_KNIGHT)
+
+PROMOTION_PIECES = {
+    FLAG_PROMOTE_QUEEN:  QUEEN,
+    FLAG_PROMOTE_ROOK:   ROOK,
+    FLAG_PROMOTE_BISHOP: BISHOP,
+    FLAG_PROMOTE_KNIGHT: KNIGHT,
+}
+
+# ==========================================
+# Directions / Offsets
+# ==========================================
+
+BISHOP_DIRS = ((1,1),(1,-1),(-1,1),(-1,-1))
+ROOK_DIRS   = ((1,0),(-1,0),(0,1),(0,-1))
+QUEEN_DIRS  = ROOK_DIRS + BISHOP_DIRS
+
+KNIGHT_OFFSETS = (
+    (2,1),(2,-1),(-2,1),(-2,-1),
+    (1,2),(1,-2),(-1,2),(-1,-2)
+)
+
+KING_OFFSETS = (
+    (-1,-1),(-1,0),(-1,1),
+    ( 0,-1),       ( 0,1),
+    ( 1,-1),( 1,0),( 1,1)
+)
+
+# ==========================================
+# Instructions
+# ==========================================
+
+instructions = """
+================Chess================
+Most rules implemented
+-No 3-fold move repetition
+-No 50-move rule
+-Stalemate draws
+
+Type in moves as startend
+Example: e2e4 or d5e3
+"""
+
+# ==========================================
+# Piece Values
+# ==========================================
+
 PIECE_VALUES = {
-    1: 100,   # Pawn
-    2: 320,   # Knight
-    3: 330,   # Bishop
-    4: 500,   # Rook
-    5: 900,   # Queen
-    6: 0      # King
+    PAWN:   100,
+    KNIGHT: 320,
+    BISHOP: 330,
+    ROOK:   500,
+    QUEEN:  900,
+    KING:   0
 }
 
-# For debugging
 PIECE_DICT = {
-    1: "Pawn",   # Pawn
-    2: "Knight",   # Knight
-    3: "Bishop",   # Bishop
-    4: "Rook",   # Rook
-    5: "Queen",   # Queen
-    6: "King"      # King
+    PAWN:   "Pawn",
+    KNIGHT: "Knight",
+    BISHOP: "Bishop",
+    ROOK:   "Rook",
+    QUEEN:  "Queen",
+    KING:   "King"
 }
 
-# Move center pawns, encourage moving up ranks
+# ==========================================
+# Piece Symbols
+# ==========================================
+
+PIECE_SYMBOLS = {
+     PAWN: "♟",  -PAWN: "♙",
+   KNIGHT: "♞",-KNIGHT: "♘",
+   BISHOP: "♝",-BISHOP: "♗",
+     ROOK: "♜",   -ROOK: "♖",
+    QUEEN: "♛",  -QUEEN: "♕",
+     KING: "♚",   -KING: "♔",
+    EMPTY: " "
+}
+
+# ==========================================
+# Transposition Table Flags
+# ==========================================
+
+TT_EXACT       = 0
+TT_LOWER_BOUND = 1
+TT_UPPER_BOUND = 2
+
+# ==========================================
+# Zobrist Hashing
+# ==========================================
+# Fixed seed for reproducibility.
+# ZOBRIST_TABLE[piece + 6][r][c]
+# piece ranges -6..6, +6 maps to indices 0..12
+
+random.seed(794613)
+
+ZOBRIST_TABLE = [
+    [[random.getrandbits(64) for _ in range(8)] for _ in range(8)]
+    for _ in range(13)
+]
+
+ZOBRIST_SIDE = random.getrandbits(64)
+
+# ==========================================
+# Piece-Square Tables
+# ==========================================
+
 PAWN_TABLE = [
 [  0,  0,  0,  0,  0,  0,  0,  0],
 [ 50, 50, 50, 50, 50, 50, 50, 50],
@@ -55,7 +147,6 @@ PAWN_TABLE = [
 [  0,  0,  0,  0,  0,  0,  0,  0]
 ]
 
-# Encourage moving to center and away from corners
 KNIGHT_TABLE = [
 [-50,-40,-30,-30,-30,-30,-40,-50],
 [-40,-20,  0,  5,  5,  0,-20,-40],
@@ -67,7 +158,6 @@ KNIGHT_TABLE = [
 [-50,-40,-30,-30,-30,-30,-40,-50]
 ]
 
-# Slightly encourage development & staying away from edges
 BISHOP_TABLE = [
 [-20,-10,-10,-10,-10,-10,-10,-20],
 [-10,  5,  0,  0,  0,  0,  5,-10],
@@ -79,7 +169,6 @@ BISHOP_TABLE = [
 [-20,-10,-10,-10,-10,-10,-10,-20]
 ]
 
-# Encourage open files & staying away from center
 ROOK_TABLE = [
 [  0,  0,  0,  5,  5,  0,  0,  0],
 [ -5,  0,  0,  0,  0,  0,  0, -5],
@@ -91,7 +180,6 @@ ROOK_TABLE = [
 [  0,  0,  0,  0,  0,  0,  0,  0]
 ]
 
-# Encourages being in center slightly
 QUEEN_TABLE = [
 [-20,-10,-10, -5, -5,-10,-10,-20],
 [-10,  0,  0,  0,  0,  0,  0,-10],
@@ -103,7 +191,6 @@ QUEEN_TABLE = [
 [-20,-10,-10, -5, -5,-10,-10,-20]
 ]
 
-# Encourage king safety
 KING_TABLE = [
 [-30,-40,-40,-50,-50,-40,-40,-30],
 [-30,-40,-40,-50,-50,-40,-40,-30],
@@ -115,7 +202,6 @@ KING_TABLE = [
 [ 20, 30, 10,  0,  0, 10, 30, 20]
 ]
 
-# Encourage king involvement
 KING_END_TABLE = [
 [-50,-40,-30,-20,-20,-30,-40,-50],
 [-30,-20,-10,  0,  0,-10,-20,-30],
