@@ -1,28 +1,45 @@
 from board import Board
-from search import *
+from movegen import generate_legal_moves, encode_move, decode_move, move_to_string
+from search import find_best_move
+from constants import *
 
-
+DEPTH = 4
 
 def parse_move(move_str):
-    # expects format like "e2e4"
-    from_file = ord(move_str[0]) - ord('a')
-    from_rank = 8 - int(move_str[1])
-    to_file   = ord(move_str[2]) - ord('a')
-    to_rank   = 8 - int(move_str[3])
-    return (from_rank, from_file, to_rank, to_file)
+    from_col = ord(move_str[0]) - ord('a')
+    from_row = 8 - int(move_str[1])
+    to_col   = ord(move_str[2]) - ord('a')
+    to_row   = 8 - int(move_str[3])
+    return encode_move(from_row, from_col, to_row, to_col)
 
 board = Board()
 board.setup_starting_position()
-print(board)
 
-# Setup starting position here
-# (You should already have this function)
-# board.setup_starting_position()
-# board.initialize_king_cache()
+"""
+for i in range (0, 8):
+    board.squares[1][i] = 0
+board.squares[0][0] = 0
+board.squares[0][1] = 0
+board.squares[0][2] = 0
+board.squares[0][3] = 0
+board.squares[0][5] = 0
+board.squares[0][6] = 0
+board.squares[0][7] = 0
+"""
+
 
 while True:
     print(board)
-    #print(evaluate(board))
+
+    legal_moves = generate_legal_moves(board)
+
+    if not legal_moves:
+        if board.is_in_check(board.white_to_move):
+            winner = "Black" if board.white_to_move else "White"
+            print(f"Checkmate! {winner} wins.")
+        else:
+            print("Stalemate! It's a draw.")
+        break
 
     if board.white_to_move:
         move_input = input("Your move (e2e4): ")
@@ -33,7 +50,11 @@ while True:
 
         move = parse_move(move_input)
 
-        legal_moves = generate_legal_moves(board)
+        # Auto-queen if pawn reaches back rank
+        # Later: replace with input prompt to choose promotion piece
+        r1, c1, r2, c2, flag = decode_move(move)
+        if abs(board.squares[r1][c1]) == PAWN and r2 == (0 if board.white_to_move else 7):
+            move = encode_move(r1, c1, r2, c2, FLAG_PROMOTE_QUEEN)
 
         if move not in legal_moves:
             print("Illegal move.")
@@ -41,36 +62,8 @@ while True:
 
         board.make_move(move)
 
-
     else:
-
         print("Bot thinking...")
-
-        moves = generate_legal_moves(board)
-
-        if not moves:
-            print("Game over.")
-            break
-
-        best_move = None
-
-        if board.white_to_move:
-            best_score = -float("inf")
-        else:
-            best_score = float("inf")
-
-        for move in moves:
-            board.make_move(move)
-            score = minimax(board, depth=3, alpha=-float("inf"), beta=float("inf"))
-            board.undo_move()
-
-            if board.white_to_move:
-                if score > best_score:
-                    best_score = score
-                    best_move = move
-            else:
-                if score < best_score:
-                    best_score = score
-                    best_move = move
-
+        best_move = find_best_move(board, DEPTH)
+        print(move_to_string(best_move, board))
         board.make_move(best_move)
