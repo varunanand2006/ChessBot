@@ -4,7 +4,8 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="e0221be7-4605-45b7-9661-e0a3e8255030" name="Changes" comment="Auto-Queen Promotions">
+    <list default="true" id="e0221be7-4605-45b7-9661-e0a3e8255030" name="Changes" comment="Promotions Working">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -135,7 +136,15 @@
       <option name="project" value="LOCAL" />
       <updated>1772422441543</updated>
     </task>
-    <option name="localTasksCounter" value="8" />
+    <task id="LOCAL-00008" summary="Promotions Working">
+      <option name="closed" value="true" />
+      <created>1772422715358</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1772422715358</updated>
+    </task>
+    <option name="localTasksCounter" value="9" />
     <servers />
   </component>
   <component name="VcsManagerConfiguration">
@@ -146,6 +155,7 @@
     <MESSAGE value="Attempted to add en-passant and castling" />
     <MESSAGE value="Starting anew with Claude" />
     <MESSAGE value="Auto-Queen Promotions" />
-    <option name="LAST_COMMIT_MESSAGE" value="Auto-Queen Promotions" />
+    <MESSAGE value="Promotions Working" />
+    <option name="LAST_COMMIT_MESSAGE" value="Promotions Working" />
   </component>
 </project>
