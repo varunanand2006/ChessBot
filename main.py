@@ -68,20 +68,28 @@ while True:
         if move not in legal_moves:
             print("Illegal move.")
             continue
-
         board.make_move(move)
 
+
     else:
+        # Increase depth as pieces come off the board
+        total_pieces = sum(1 for r in range(8) for c in range(8) if board.squares[r][c] != EMPTY)
+        if total_pieces <= 4:
+            depth = DEPTH + 5
+        elif total_pieces <= 6:
+            depth = DEPTH + 4
+        elif total_pieces <= 8:
+            depth = DEPTH + 3
+        elif total_pieces <= 12:
+            depth = DEPTH + 2
+        elif total_pieces <= 20:
+            depth = DEPTH + 1
+        else:
+            depth = DEPTH
         print("Bot thinking...")
         start = time.time()
-        best_move = find_best_move(board, DEPTH)
+        best_move = find_best_move(board, depth)
         elapsed = time.time() - start
         print(f"  Time: {elapsed:.2f}s")
         print(f"  {move_to_string(best_move, board)}")
         board.make_move(best_move)
-
-    # Check for threefold repetition after every move
-    if board.position_history.get(board.hash, 0) >= 3:
-        print(board)
-        print("Draw by threefold repetition.")
-        break

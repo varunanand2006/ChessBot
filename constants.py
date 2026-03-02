@@ -63,11 +63,6 @@ KING_OFFSETS = (
 
 instructions = """
 ================Chess================
-Most rules implemented
--No 3-fold move repetition
--No 50-move rule
--Stalemate draws
-
 Type in moves as startend
 Example: e2e4 or d5e3
 """
