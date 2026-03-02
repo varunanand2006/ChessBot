@@ -4,12 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="e0221be7-4605-45b7-9661-e0a3e8255030" name="Changes" comment="Added Move Scoring">
-      <change beforePath="$PROJECT_DIR$/.idea/ChessV2.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/ChessV2.iml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+    <list default="true" id="e0221be7-4605-45b7-9661-e0a3e8255030" name="Changes" comment="Transposition Table Optimization">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/board.py" beforeDir="false" afterPath="$PROJECT_DIR$/board.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/constants.py" beforeDir="false" afterPath="$PROJECT_DIR$/constants.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/movegen.py" beforeDir="false" afterPath="$PROJECT_DIR$/movegen.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/search.py" beforeDir="false" afterPath="$PROJECT_DIR$/search.py" afterDir="false" />
@@ -103,13 +100,22 @@
       <option name="project" value="LOCAL" />
       <updated>1772084341615</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="Transposition Table Optimization">
+      <option name="closed" value="true" />
+      <created>1772475821281</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1772475821281</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Initial Commit" />
     <MESSAGE value="Minimax Prototype" />
     <MESSAGE value="Fixed Minimax" />
-    <option name="LAST_COMMIT_MESSAGE" value="Fixed Minimax" />
+    <MESSAGE value="Transposition Table Optimization" />
+    <option name="LAST_COMMIT_MESSAGE" value="Transposition Table Optimization" />
   </component>
 </project>

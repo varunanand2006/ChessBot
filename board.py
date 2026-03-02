@@ -35,6 +35,10 @@ class Board:
 
         self.hash = 0
 
+        # Tracks how many times each position hash has occurred this game.
+        # Used for threefold repetition detection.
+        self.position_history = {}
+
         # Move stack — flat tuple per entry:
         # (move, captured, wkr, wkc, bkr, bkc,
         #  white_to_move, ep_r, ep_c,
@@ -69,8 +73,10 @@ class Board:
         self.castle_wq      = True
         self.castle_bk      = True
         self.castle_bq      = True
-        self.move_stack     = []
-        self.hash           = _compute_hash(self.squares, self.white_to_move)
+        self.move_stack        = []
+        self.position_history  = {}
+        self.hash              = _compute_hash(self.squares, self.white_to_move)
+        self.position_history[self.hash] = 1
 
     def initialize_king_cache(self):
         for r in range(8):
@@ -81,6 +87,7 @@ class Board:
                 elif piece == -KING:
                     self.black_king_pos = (r, c)
         self.hash = _compute_hash(self.squares, self.white_to_move)
+        self.position_history = {self.hash: 1}
 
     # ==========================================
     # Make / Undo
@@ -184,6 +191,9 @@ class Board:
         self.hash ^= ZOBRIST_SIDE
         self.white_to_move = not self.white_to_move
 
+        # Record this position for repetition detection
+        self.position_history[self.hash] = self.position_history.get(self.hash, 0) + 1
+
     def undo_move(self):
         (move, captured,
          wkr, wkc, bkr, bkc,
@@ -232,7 +242,9 @@ class Board:
         self.castle_wq      = castle_wq
         self.castle_bk      = castle_bk
         self.castle_bq      = castle_bq
-        self.hash           = saved_hash
+        # Decrement the position we're leaving BEFORE restoring the hash
+        self.position_history[self.hash] = self.position_history.get(self.hash, 1) - 1
+        self.hash = saved_hash
 
     # ==========================================
     # King Helpers
@@ -300,7 +312,6 @@ class Board:
     # ==========================================
     # Display
     # ==========================================
-
 
     def __str__(self):
         result = "  ╔═════════════════════════════╗\n"

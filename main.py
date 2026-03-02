@@ -79,3 +79,9 @@ while True:
         print(f"  Time: {elapsed:.2f}s")
         print(f"  {move_to_string(best_move, board)}")
         board.make_move(best_move)
+
+    # Check for threefold repetition after every move
+    if board.position_history.get(board.hash, 0) >= 3:
+        print(board)
+        print("Draw by threefold repetition.")
+        break

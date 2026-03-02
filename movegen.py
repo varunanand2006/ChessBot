@@ -190,35 +190,39 @@ def generate_king_moves(board, r, c):
         return moves
 
     if white:
-        if (board.castle_wk
+        if (r == 7 and c == 4 and board.castle_wk
                 and board.squares[7][5] == EMPTY
                 and board.squares[7][6] == EMPTY
+                and board.squares[7][7] == ROOK
                 and not board.is_square_attacked((7, 4), False)
                 and not board.is_square_attacked((7, 5), False)
                 and not board.is_square_attacked((7, 6), False)):
             moves.append(encode_move(7, 4, 7, 6, FLAG_CASTLE_KINGSIDE))
 
-        if (board.castle_wq
+        if (r == 7 and c == 4 and board.castle_wq
                 and board.squares[7][3] == EMPTY
                 and board.squares[7][2] == EMPTY
                 and board.squares[7][1] == EMPTY
+                and board.squares[7][0] == ROOK
                 and not board.is_square_attacked((7, 4), False)
                 and not board.is_square_attacked((7, 3), False)
                 and not board.is_square_attacked((7, 2), False)):
             moves.append(encode_move(7, 4, 7, 2, FLAG_CASTLE_QUEENSIDE))
     else:
-        if (board.castle_bk
+        if (r == 0 and c == 4 and board.castle_bk
                 and board.squares[0][5] == EMPTY
                 and board.squares[0][6] == EMPTY
+                and board.squares[0][7] == -ROOK
                 and not board.is_square_attacked((0, 4), True)
                 and not board.is_square_attacked((0, 5), True)
                 and not board.is_square_attacked((0, 6), True)):
             moves.append(encode_move(0, 4, 0, 6, FLAG_CASTLE_KINGSIDE))
 
-        if (board.castle_bq
+        if (r == 0 and c == 4 and board.castle_bq
                 and board.squares[0][3] == EMPTY
                 and board.squares[0][2] == EMPTY
                 and board.squares[0][1] == EMPTY
+                and board.squares[0][0] == -ROOK
                 and not board.is_square_attacked((0, 4), True)
                 and not board.is_square_attacked((0, 3), True)
                 and not board.is_square_attacked((0, 2), True)):
