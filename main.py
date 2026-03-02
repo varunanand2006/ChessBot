@@ -1,9 +1,13 @@
+import time
 from board import Board
 from movegen import generate_legal_moves, encode_move, decode_move, move_to_string
 from search import find_best_move
 from constants import *
 
-DEPTH = 3
+import sys
+print(sys.version)
+
+DEPTH = 4
 
 def parse_move(move_str):
     from_col = ord(move_str[0]) - ord('a')
@@ -48,13 +52,13 @@ while True:
                     "b": FLAG_PROMOTE_BISHOP, "n": FLAG_PROMOTE_KNIGHT}[promo_input]
             move = encode_move(r1, c1, r2, c2, flag)
 
-        # En passant flag fix
+        # En passant
         elif (abs(board.squares[r1][c1]) == PAWN
                 and board.en_passant_sq is not None
                 and (r2, c2) == board.en_passant_sq):
             move = encode_move(r1, c1, r2, c2, FLAG_EN_PASSANT)
 
-        # Castling flag fix — player types e1g1 or e1c1
+        # Castling
         elif abs(board.squares[r1][c1]) == KING and abs(c2 - c1) == 2:
             if c2 > c1:
                 move = encode_move(r1, c1, r2, c2, FLAG_CASTLE_KINGSIDE)
@@ -64,11 +68,28 @@ while True:
         if move not in legal_moves:
             print("Illegal move.")
             continue
-
         board.make_move(move)
 
+
     else:
+        # Increase depth as pieces come off the board
+        total_pieces = sum(1 for r in range(8) for c in range(8) if board.squares[r][c] != EMPTY)
+        if total_pieces <= 4:
+            depth = DEPTH + 5
+        elif total_pieces <= 6:
+            depth = DEPTH + 4
+        elif total_pieces <= 8:
+            depth = DEPTH + 3
+        elif total_pieces <= 12:
+            depth = DEPTH + 2
+        elif total_pieces <= 20:
+            depth = DEPTH + 1
+        else:
+            depth = DEPTH
         print("Bot thinking...")
-        best_move = find_best_move(board, DEPTH)
-        print(move_to_string(best_move, board))
+        start = time.time()
+        best_move = find_best_move(board, depth)
+        elapsed = time.time() - start
+        print(f"  Time: {elapsed:.2f}s")
+        print(f"  {move_to_string(best_move, board)}")
         board.make_move(best_move)

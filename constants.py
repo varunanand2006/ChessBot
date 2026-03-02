@@ -1,3 +1,5 @@
+import random
+
 # ==========================================
 # Piece Types
 # ==========================================
@@ -14,7 +16,7 @@ WHITE = True
 BLACK = False
 
 # ==========================================
-# Move Flags  (bits 12-14 of encoded move)
+# Move Flags (bits 12-14 of encoded move)
 # ==========================================
 
 FLAG_NORMAL           = 0
@@ -23,8 +25,8 @@ FLAG_PROMOTE_QUEEN    = 2
 FLAG_PROMOTE_ROOK     = 3
 FLAG_PROMOTE_BISHOP   = 4
 FLAG_PROMOTE_KNIGHT   = 5
-FLAG_CASTLE_KINGSIDE  = 6  # reserved
-FLAG_CASTLE_QUEENSIDE = 7  # reserved
+FLAG_CASTLE_KINGSIDE  = 6
+FLAG_CASTLE_QUEENSIDE = 7
 
 PROMOTION_FLAGS = (FLAG_PROMOTE_QUEEN, FLAG_PROMOTE_ROOK,
                    FLAG_PROMOTE_BISHOP, FLAG_PROMOTE_KNIGHT)
@@ -37,13 +39,12 @@ PROMOTION_PIECES = {
 }
 
 # ==========================================
-# Piece move directions / offsets
-# (defined once here, imported everywhere)
+# Directions / Offsets
 # ==========================================
 
-BISHOP_DIRS  = ((1,1),(1,-1),(-1,1),(-1,-1))
-ROOK_DIRS    = ((1,0),(-1,0),(0,1),(0,-1))
-QUEEN_DIRS   = ROOK_DIRS + BISHOP_DIRS
+BISHOP_DIRS = ((1,1),(1,-1),(-1,1),(-1,-1))
+ROOK_DIRS   = ((1,0),(-1,0),(0,1),(0,-1))
+QUEEN_DIRS  = ROOK_DIRS + BISHOP_DIRS
 
 KNIGHT_OFFSETS = (
     (2,1),(2,-1),(-2,1),(-2,-1),
@@ -56,28 +57,12 @@ KING_OFFSETS = (
     ( 1,-1),( 1,0),( 1,1)
 )
 
-PIECE_SYMBOLS = {
-        -1: "♙", 1: "♟",
-        -2: "♘", 2: "♞",
-        -3: "♗", 3: "♝",
-        -4: "♖", 4: "♜",
-        -5: "♕", 5: "♛",
-        -6: "♔", 6: "♚",
-        0: " "
-    }
-
 # ==========================================
 # Instructions
 # ==========================================
 
 instructions = """
 ================Chess================
-Most rules implemented
--No castling (not yet decided)
--No 3-fold move repetition
--No 50-move rule
--Stalemate draws
-
 Type in moves as startend
 Example: e2e4 or d5e3
 """
@@ -103,6 +88,44 @@ PIECE_DICT = {
     QUEEN:  "Queen",
     KING:   "King"
 }
+
+# ==========================================
+# Piece Symbols
+# ==========================================
+
+PIECE_SYMBOLS = {
+     PAWN: "♟",  -PAWN: "♙",
+   KNIGHT: "♞",-KNIGHT: "♘",
+   BISHOP: "♝",-BISHOP: "♗",
+     ROOK: "♜",   -ROOK: "♖",
+    QUEEN: "♛",  -QUEEN: "♕",
+     KING: "♚",   -KING: "♔",
+    EMPTY: " "
+}
+
+# ==========================================
+# Transposition Table Flags
+# ==========================================
+
+TT_EXACT       = 0
+TT_LOWER_BOUND = 1
+TT_UPPER_BOUND = 2
+
+# ==========================================
+# Zobrist Hashing
+# ==========================================
+# Fixed seed for reproducibility.
+# ZOBRIST_TABLE[piece + 6][r][c]
+# piece ranges -6..6, +6 maps to indices 0..12
+
+random.seed(794613)
+
+ZOBRIST_TABLE = [
+    [[random.getrandbits(64) for _ in range(8)] for _ in range(8)]
+    for _ in range(13)
+]
+
+ZOBRIST_SIDE = random.getrandbits(64)
 
 # ==========================================
 # Piece-Square Tables
@@ -184,43 +207,3 @@ KING_END_TABLE = [
 [-30,-30,  0,  0,  0,  0,-30,-30],
 [-50,-30,-30,-30,-30,-30,-30,-50]
 ]
-
-"""
-def __str__(self):
-    piece_symbols = {
-        -1: "♙", 1: "♟",
-        -2: "♘", 2: "♞",
-        -3: "♗", 3: "♝",
-        -4: "♖", 4: "♜",
-        -5: "♕", 5: "♛",
-        -6: "♔", 6: "♚",
-        0: " "
-    }
-
-    result = "  ╔═════════════════════════════╗\n"
-
-    for r in range(8):
-        result += str(8 - r) + " ║"
-
-        for c in range(8):
-            piece = self.squares[r][c]
-            symbol = piece_symbols[piece]
-
-            # Simple square coloring
-            if (r + c) % 2 == 0:
-                result += f"[{symbol}]"
-            else:
-                result += f" {symbol} "
-
-        result += "║\n"
-
-    result += "  ╚═════════════════════════════╝\n"
-    result += "    a  b  c  d  e  f  g  h\n"
-
-    if self.white_to_move:
-        result += "White to move\n"
-    else:
-        result += "Black to move\n"
-
-    return result
-"""

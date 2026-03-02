@@ -1,6 +1,23 @@
 from constants import *
 from movegen import decode_move
 
+
+def _zobrist(piece, r, c):
+    return ZOBRIST_TABLE[piece + 6][r][c]
+
+
+def _compute_hash(squares, white_to_move):
+    h = 0
+    for r in range(8):
+        for c in range(8):
+            piece = squares[r][c]
+            if piece != EMPTY:
+                h ^= _zobrist(piece, r, c)
+    if not white_to_move:
+        h ^= ZOBRIST_SIDE
+    return h
+
+
 class Board:
     def __init__(self):
         self.squares       = [[EMPTY] * 8 for _ in range(8)]
@@ -9,19 +26,23 @@ class Board:
         self.white_king_pos = None
         self.black_king_pos = None
 
-        # En passant target square (landing square), or None
         self.en_passant_sq = None
 
-        # Castling rights
-        self.castle_wk = True   # White kingside
-        self.castle_wq = True   # White queenside
-        self.castle_bk = True   # Black kingside
-        self.castle_bq = True   # Black queenside
+        self.castle_wk = True
+        self.castle_wq = True
+        self.castle_bk = True
+        self.castle_bq = True
 
-        # Move stack entries are flat tuples:
+        self.hash = 0
+
+        # Tracks how many times each position hash has occurred this game.
+        # Used for threefold repetition detection.
+        self.position_history = {}
+
+        # Move stack — flat tuple per entry:
         # (move, captured, wkr, wkc, bkr, bkc,
         #  white_to_move, ep_r, ep_c,
-        #  castle_wk, castle_wq, castle_bk, castle_bq)
+        #  castle_wk, castle_wq, castle_bk, castle_bq, hash)
         self.move_stack = []
 
     # ==========================================
@@ -52,7 +73,10 @@ class Board:
         self.castle_wq      = True
         self.castle_bk      = True
         self.castle_bq      = True
-        self.move_stack     = []
+        self.move_stack        = []
+        self.position_history  = {}
+        self.hash              = _compute_hash(self.squares, self.white_to_move)
+        self.position_history[self.hash] = 1
 
     def initialize_king_cache(self):
         for r in range(8):
@@ -62,6 +86,8 @@ class Board:
                     self.white_king_pos = (r, c)
                 elif piece == -KING:
                     self.black_king_pos = (r, c)
+        self.hash = _compute_hash(self.squares, self.white_to_move)
+        self.position_history = {self.hash: 1}
 
     # ==========================================
     # Make / Undo
@@ -74,7 +100,6 @@ class Board:
         captured = self.squares[r2][c2]
         white    = moving > 0
 
-        # Save state
         wkr, wkc = self.white_king_pos
         bkr, bkc = self.black_king_pos
         ep_r, ep_c = self.en_passant_sq if self.en_passant_sq else (-1, -1)
@@ -85,53 +110,59 @@ class Board:
             self.white_to_move,
             ep_r, ep_c,
             self.castle_wk, self.castle_wq,
-            self.castle_bk, self.castle_bq
+            self.castle_bk, self.castle_bq,
+            self.hash
         ))
 
-        # Clear en passant — re-set below if double push
         self.en_passant_sq = None
 
-        # --- Handle each flag ---
+        # --- Incremental Zobrist update ---
+        self.hash ^= _zobrist(moving, r1, c1)
+        if captured != EMPTY:
+            self.hash ^= _zobrist(captured, r2, c2)
 
+        # --- Apply move ---
         if flag == FLAG_EN_PASSANT:
             self.squares[r1][c1] = EMPTY
             self.squares[r2][c2] = moving
             cap_r = r2 + (1 if white else -1)
+            cap_piece = self.squares[cap_r][c2]
+            self.hash ^= _zobrist(cap_piece, cap_r, c2)
             self.squares[cap_r][c2] = EMPTY
+            self.hash ^= _zobrist(moving, r2, c2)
 
         elif flag in PROMOTION_FLAGS:
             promo_piece = PROMOTION_PIECES[flag]
+            placed = promo_piece if white else -promo_piece
             self.squares[r1][c1] = EMPTY
-            self.squares[r2][c2] = promo_piece if white else -promo_piece
+            self.squares[r2][c2] = placed
+            self.hash ^= _zobrist(placed, r2, c2)
 
         elif flag == FLAG_CASTLE_KINGSIDE:
-            # Move king
             self.squares[r1][c1] = EMPTY
             self.squares[r2][c2] = moving
-            # Move rook from h-file to f-file
-            rook_col_from = 7
-            rook_col_to   = 5
-            rook = self.squares[r1][rook_col_from]
-            self.squares[r1][rook_col_from] = EMPTY
-            self.squares[r1][rook_col_to]   = rook
+            self.hash ^= _zobrist(moving, r2, c2)
+            rook = self.squares[r1][7]
+            self.hash ^= _zobrist(rook, r1, 7)
+            self.squares[r1][7] = EMPTY
+            self.squares[r1][5] = rook
+            self.hash ^= _zobrist(rook, r1, 5)
 
         elif flag == FLAG_CASTLE_QUEENSIDE:
-            # Move king
             self.squares[r1][c1] = EMPTY
             self.squares[r2][c2] = moving
-            # Move rook from a-file to d-file
-            rook_col_from = 0
-            rook_col_to   = 3
-            rook = self.squares[r1][rook_col_from]
-            self.squares[r1][rook_col_from] = EMPTY
-            self.squares[r1][rook_col_to]   = rook
+            self.hash ^= _zobrist(moving, r2, c2)
+            rook = self.squares[r1][0]
+            self.hash ^= _zobrist(rook, r1, 0)
+            self.squares[r1][0] = EMPTY
+            self.squares[r1][3] = rook
+            self.hash ^= _zobrist(rook, r1, 3)
 
         else:
-            # Normal move
             self.squares[r1][c1] = EMPTY
             self.squares[r2][c2] = moving
+            self.hash ^= _zobrist(moving, r2, c2)
 
-            # Double pawn push — set en passant target
             if abs(moving) == PAWN and abs(r2 - r1) == 2:
                 self.en_passant_sq = ((r1 + r2) // 2, c1)
 
@@ -142,27 +173,26 @@ class Board:
             self.black_king_pos = (r2, c2)
 
         # Update castling rights
-        # King moves — lose both rights for that side
         if moving == KING:
-            self.castle_wk = False
-            self.castle_wq = False
+            self.castle_wk = False;  self.castle_wq = False
         elif moving == -KING:
-            self.castle_bk = False
-            self.castle_bq = False
+            self.castle_bk = False;  self.castle_bq = False
 
-        # Rook moves or is captured — lose the relevant right
         if r1 == 7 and c1 == 7: self.castle_wk = False
         if r1 == 7 and c1 == 0: self.castle_wq = False
         if r1 == 0 and c1 == 7: self.castle_bk = False
         if r1 == 0 and c1 == 0: self.castle_bq = False
-
-        # Rook captured on its starting square
         if r2 == 7 and c2 == 7: self.castle_wk = False
         if r2 == 7 and c2 == 0: self.castle_wq = False
         if r2 == 0 and c2 == 7: self.castle_bk = False
         if r2 == 0 and c2 == 0: self.castle_bq = False
 
+        # Flip side to move
+        self.hash ^= ZOBRIST_SIDE
         self.white_to_move = not self.white_to_move
+
+        # Record this position for repetition detection
+        self.position_history[self.hash] = self.position_history.get(self.hash, 0) + 1
 
     def undo_move(self):
         (move, captured,
@@ -170,7 +200,8 @@ class Board:
          white_to_move,
          ep_r, ep_c,
          castle_wk, castle_wq,
-         castle_bk, castle_bq) = self.move_stack.pop()
+         castle_bk, castle_bq,
+         saved_hash) = self.move_stack.pop()
 
         r1, c1, r2, c2, flag = decode_move(move)
         white = white_to_move
@@ -186,19 +217,15 @@ class Board:
             self.squares[r2][c2] = captured
 
         elif flag == FLAG_CASTLE_KINGSIDE:
-            # Restore king
             self.squares[r1][c1] = KING if white else -KING
             self.squares[r2][c2] = EMPTY
-            # Restore rook
             rook = ROOK if white else -ROOK
             self.squares[r1][5] = EMPTY
             self.squares[r1][7] = rook
 
         elif flag == FLAG_CASTLE_QUEENSIDE:
-            # Restore king
             self.squares[r1][c1] = KING if white else -KING
             self.squares[r2][c2] = EMPTY
-            # Restore rook
             rook = ROOK if white else -ROOK
             self.squares[r1][3] = EMPTY
             self.squares[r1][0] = rook
@@ -207,7 +234,6 @@ class Board:
             self.squares[r1][c1] = self.squares[r2][c2]
             self.squares[r2][c2] = captured
 
-        # Restore all saved state
         self.white_king_pos = (wkr, wkc)
         self.black_king_pos = (bkr, bkc)
         self.white_to_move  = white_to_move
@@ -216,6 +242,9 @@ class Board:
         self.castle_wq      = castle_wq
         self.castle_bk      = castle_bk
         self.castle_bq      = castle_bq
+        # Decrement the position we're leaving BEFORE restoring the hash
+        self.position_history[self.hash] = self.position_history.get(self.hash, 1) - 1
+        self.hash = saved_hash
 
     # ==========================================
     # King Helpers
@@ -256,24 +285,24 @@ class Board:
                 if self.squares[rr][cc] == (KING if by_white else -KING):
                     return True
 
-        # Rooks / Queens (straight lines)
+        # Rooks / Queens
         for dr, dc in ROOK_DIRS:
             rr, cc = r + dr, c + dc
             while 0 <= rr < 8 and 0 <= cc < 8:
                 piece = self.squares[rr][cc]
                 if piece != EMPTY:
-                    if by_white and piece in (ROOK, QUEEN):   return True
-                    if not by_white and piece in (-ROOK, -QUEEN): return True
+                    if by_white and piece in (ROOK, QUEEN):         return True
+                    if not by_white and piece in (-ROOK, -QUEEN):   return True
                     break
                 rr += dr; cc += dc
 
-        # Bishops / Queens (diagonals)
+        # Bishops / Queens
         for dr, dc in BISHOP_DIRS:
             rr, cc = r + dr, c + dc
             while 0 <= rr < 8 and 0 <= cc < 8:
                 piece = self.squares[rr][cc]
                 if piece != EMPTY:
-                    if by_white and piece in (BISHOP, QUEEN):   return True
+                    if by_white and piece in (BISHOP, QUEEN):       return True
                     if not by_white and piece in (-BISHOP, -QUEEN): return True
                     break
                 rr += dr; cc += dc
