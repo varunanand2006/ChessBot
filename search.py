@@ -8,6 +8,7 @@ from movegen import generate_legal_moves, decode_move
 def evaluate(board):
     material_score   = 0
     positional_score = 0
+    total_material   = 0
 
     for r in range(8):
         for c in range(8):
@@ -17,6 +18,10 @@ def evaluate(board):
 
             abs_piece = abs(piece)
             value     = PIECE_VALUES[abs_piece]
+
+            # Track total non-king material for endgame detection
+            if abs_piece != KING:
+                total_material += value
 
             if piece > 0:
                 material_score += value
@@ -34,7 +39,7 @@ def evaluate(board):
             elif abs_piece == QUEEN:
                 table = QUEEN_TABLE
             elif abs_piece == KING:
-                table = KING_TABLE
+                table = KING_END_TABLE if total_material < 1500 else KING_TABLE
             else:
                 continue
 
@@ -45,13 +50,22 @@ def evaluate(board):
             else:
                 positional_score -= table_value
 
-    check_penalty = 0
-    if board.is_in_check(True):
-        check_penalty -= 50
-    if board.is_in_check(False):
-        check_penalty += 50
+    # King distance penalty — when one side is up material,
+    # reward the winning side for bringing kings closer together.
+    # This helps convert winning endgames.
+    king_distance_score = 0
+    if total_material < 2000 and material_score != 0:
+        wkr, wkc = board.white_king_pos
+        bkr, bkc = board.black_king_pos
+        king_distance = abs(wkr - bkr) + abs(wkc - bkc)
 
-    return material_score + positional_score + check_penalty
+        # Winning side wants kings close, losing side wants them far
+        if material_score > 0:
+            king_distance_score = -king_distance * 5
+        else:
+            king_distance_score = king_distance * 5
+
+    return material_score + positional_score + king_distance_score
 
 
 # ==========================================
@@ -82,9 +96,11 @@ def score_move(board, move):
 # Quiescence Search
 # ==========================================
 
-def quiescence(board, alpha, beta):
-    # Stand-pat: the side to move can always choose not to capture.
-    # If the static eval is already good enough, return it.
+def quiescence(board, alpha, beta, qdepth=4):
+    if qdepth == 0:
+        return evaluate(board)
+
+    # Stand-pat: the side to move can always choose not to capture
     stand_pat = evaluate(board)
 
     if stand_pat >= beta:
@@ -92,9 +108,15 @@ def quiescence(board, alpha, beta):
     if stand_pat > alpha:
         alpha = stand_pat
 
-    # Generate captures only (destination square is not empty)
     legal_moves = generate_legal_moves(board)
 
+    # Handle checkmate/stalemate in quiescence
+    if not legal_moves:
+        if board.is_in_check(board.white_to_move):
+            return -99999 if board.white_to_move else 99999
+        return 0
+
+    # Captures only (including en passant)
     captures = [
         m for m in legal_moves
         if board.squares[decode_move(m)[2]][decode_move(m)[3]] != EMPTY
@@ -105,7 +127,7 @@ def quiescence(board, alpha, beta):
 
     for move in captures:
         board.make_move(move)
-        score = -quiescence(board, -beta, -alpha)
+        score = -quiescence(board, -beta, -alpha, qdepth - 1)
         board.undo_move()
 
         if score >= beta:
@@ -128,7 +150,8 @@ def minimax(board, depth, alpha, beta):
 
     if not legal_moves:
         if board.is_in_check(board.white_to_move):
-            return -99999 if board.white_to_move else 99999
+            # Prefer faster mates by adding depth to the score
+            return -99999 - depth if board.white_to_move else 99999 + depth
         return 0  # Stalemate
 
     legal_moves.sort(key=lambda move: score_move(board, move), reverse=True)
