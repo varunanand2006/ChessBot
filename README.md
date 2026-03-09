@@ -234,6 +234,72 @@ PyPy doesn't support C-extension packages (notably Pygame), which necessitates t
 
 ---
 
+### 10. Texel Tuning (PST Optimisation)
+
+**What it is:**
+Texel tuning is a machine-learning method for optimising piece-square table values using real game data. Rather than setting PST values by hand, a PyTorch model treats every entry in every table as a learnable parameter and adjusts them to minimise prediction error across hundreds of thousands of evaluated positions.
+
+The model is intentionally simple — it is exactly the engine's `evaluate()` function expressed as a linear operation:
+
+```
+score = feature_vector @ weights
+```
+
+where `feature_vector` encodes which pieces are on which squares and `weights` are the 453 PST/piece-value parameters (7 tables × 64 squares + 5 piece values). Because the model is linear and matches the engine's eval exactly, PyTorch's gradients are exact — there is no approximation.
+
+The loss function maps centipawn scores into win-probability space via a sigmoid before comparing, which prevents large-score outliers from dominating training:
+
+```python
+pred_p   = torch.sigmoid(K * pred)
+target_p = torch.sigmoid(K * target)
+loss     = ((pred_p - target_p) ** 2).mean()
+```
+
+L2 regularisation is applied to PST weights only (not piece values) to prevent table entries from growing to unrealistic magnitudes.
+
+**Data sources:**
+Two separate datasets were generated and trained independently:
+
+- **Self-play** (`texel_generate.py`): Stockfish plays randomised games at depth 6, collecting ~200k quiet positions evaluated at depth 10.
+- **Lichess** (`texel_generate_lichess.py`): Streams a monthly Lichess PGN dump, filters to games above 1800 ELO, extracts quiet positions at regular intervals, and evaluates them with Stockfish.
+
+**Blending:**
+Rather than using one dataset's output directly, `constants.py` defines all three source tables explicitly — `HANDCRAFT_*`, `SELFPLAY_*`, `LICHESS_*` — and computes the final tables as a weighted blend at import time:
+
+```python
+PAWN_TABLE = _blend(HANDCRAFT_PAWN_TABLE, SELFPLAY_PAWN_TABLE, LICHESS_PAWN_TABLE,
+                    w_hand=0.25, w_self=0.375, w_lich=0.375)
+```
+
+Blend weights were chosen per-table based on the quality of each source. For example, both tuned rook tables showed the Lichess version correctly capturing 7th-rank and open-file bonuses while the self-play version was almost entirely negative (an overfitting artifact), so Lichess is weighted more heavily there. The king tables are hand-crafted only — king safety depends on pawn shelter and open files in a way that a context-free PST cannot encode, so the tuned versions were discarded.
+
+**Why we added it:**
+Hand-crafted PST values encode human intuition but miss subtleties that only emerge from large amounts of real game data. Texel tuning is a principled way to let the data refine the tables while keeping the evaluation function completely unchanged — no new features, no slower evaluation, just better numbers.
+
+**The tradeoff:**
+The tuning pipeline requires Stockfish, ~200k positions, and several hours of compute per dataset. The evaluation function itself is identical — there is no runtime cost at all. The blend approach also means the hand-crafted values act as an anchor, preventing the tuned data from introducing noise into tables where it performed poorly (notably king safety).
+
+**Running the pipeline:**
+
+```bash
+# Install dependencies
+pip install torch chess zstandard numpy
+
+# Generate self-play data (~2–3 hours)
+python texel_generate.py --stockfish "path/to/stockfish" --positions 200000
+
+# Or generate from a Lichess PGN dump (~2–3 hours)
+python texel_generate_lichess.py --pgn lichess_db_standard_rated_2017-02.pgn.zst \
+    --stockfish "path/to/stockfish" --positions 200000 --min-elo 1800
+
+# Train
+python texel_train.py --data texel_data.csv --epochs 2000 --lr 1.0 --l2 0.001
+```
+
+Lichess PGN dumps are available at [database.lichess.org](https://database.lichess.org). Stockfish binaries are available at [stockfishchess.org/download](https://stockfishchess.org/download/).
+
+---
+
 ## Dynamic Depth Scaling
 
 As pieces come off the board the search space shrinks, so `main.py` automatically increases depth in the endgame:
@@ -264,8 +330,7 @@ With `DEPTH = 4`, this gives depth 9 in a K+P vs K endgame — enough to convert
 | Transposition table | **~40% faster** | ~150 | ~1250 |
 | Iterative deepening | ~10% slower | ~75 | ~1325 |
 | PyPy JIT | **~5× faster** | ~150 | ~1475 |
-
-The core insight this table illustrates: **alpha-beta, move ordering, and PyPy are pure speed wins** — they make the engine faster with no strength cost, effectively buying free depth. **Quiescence search is the opposite** — it deliberately searches more nodes and runs slower, but its ELO gain is the highest of any single feature. The two categories are complementary: speed features buy depth, and depth amplifies the accuracy that quiescence search provides.
+| Texel tuning | No runtime cost | ~50–100 | ~1550 |
 
 ---
 
