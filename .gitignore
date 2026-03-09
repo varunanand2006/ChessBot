@@ -1,0 +1,14 @@
+# Generated training data — large files, regenerate locally
+*.csv
+*.pt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# PyCharm
+.idea/
+
+# Downloaded assets
+pieces/
