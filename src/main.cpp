@@ -162,6 +162,15 @@ int run_tb(int argc, char** argv) {
 
 // ---- Interactive play + one-shot search ------------------------------------
 
+// A position is illegal to search if the side NOT to move is in check: the
+// previous move would have been illegal, and the engine (which only guards the
+// mover's own king) would happily "capture" the exposed king and then evaluate a
+// king-less board. Reject such FENs up front rather than crash.
+bool position_legal(const Position& pos) {
+    const Square their_king = movegen::king_square(pos, ~pos.side_to_move);
+    return !movegen::is_attacked(pos, their_king, pos.side_to_move);
+}
+
 char piece_char(const Position& pos, Square s) {
     const PieceType t = pos.piece_type_on(s);
     if (t == PieceType::None) return '.';
@@ -228,6 +237,10 @@ int run_search(int argc, char** argv) {
     const std::string fen = join_fen(argc, argv, 3);
     Position pos;
     if (!set_fen(pos, fen)) { std::fprintf(stderr, "invalid FEN: %s\n", fen.c_str()); return 1; }
+    if (!position_legal(pos)) {
+        std::fprintf(stderr, "illegal position (side to move can capture the enemy king): %s\n", fen.c_str());
+        return 1;
+    }
 
     search::new_game();
     search::history_add(pos.zobrist);
@@ -255,6 +268,10 @@ int run_play(int argc, char** argv) {
     const std::string fen = join_fen(argc, argv, fen_start);
     Position pos;
     if (!set_fen(pos, fen)) { std::fprintf(stderr, "invalid FEN: %s\n", fen.c_str()); return 1; }
+    if (!position_legal(pos)) {
+        std::fprintf(stderr, "illegal position (side to move can capture the enemy king): %s\n", fen.c_str());
+        return 1;
+    }
 
     search::new_game();
     search::history_add(pos.zobrist);

@@ -50,6 +50,11 @@ add_executable(test_search test_search.cpp)
 target_link_libraries(test_search PRIVATE chess_engine chess_project_options)
 add_test(NAME search COMMAND test_search)
 
+# Phase 4: tablebase probing — correct WDL + search pruning (3-man, fast).
+add_executable(test_tb_probe test_tb_probe.cpp)
+target_link_libraries(test_tb_probe PRIVATE chess_engine chess_project_options)
+add_test(NAME tb_probe COMMAND test_tb_probe)
+
 # Phase 2 / Step 2.1: tablebase position indexing bijection + symmetry.
 # Fast tier = 3-man; slow tier adds 4-man (millions of positions).
 add_executable(test_tb_index test_tb_index.cpp)

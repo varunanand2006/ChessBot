@@ -111,6 +111,9 @@ cmake --build build-debug
 # Play a game vs the engine (you are White). Optional depth + FEN.
 ./build/chess.exe play 4
 
+# Tablebase probing: node-count reduction, heuristic vs TB-probing search
+./build/benchmarks/tb_probe_bench.exe
+
 # Regenerate the eval tables from the Python Texel constants (one-off)
 python python/gen_eval_tables.py > src/eval_tables.inc
 ```
@@ -233,9 +236,8 @@ Next candidate steps (pick per goal — GPU relevance vs. table coverage):
   achieved memory bandwidth as the headline metric. (Needs 4/5-man tables to be
   worth a GPU — 3-man is too small.) `/cuda` does not exist yet.
 - **Phase 4:** Verify generated tables against Syzygy or Gaviota (Gaviota = DTM,
-  the matching metric). Integrate tablebase probing into leaf evaluation; measure
-  node-count reduction. The C++ search + evaluation now exist (below), so the
-  remaining Phase 4 work is the probe hookup + measurement.
+  the matching metric) — NOT yet done. Tablebase probing IN THE SEARCH is done
+  (below); the remaining Phase 4 work is external DTM verification.
 - **Phase 5 (stretch):** Use the tablebase as a perfect-play oracle to measure how
   often alpha-beta selects an optimal move at fixed node budgets. Also needs the
   search.
@@ -268,15 +270,37 @@ CLI `chess search` / `chess play`):
   offline-style search yet). Scores stay White-relative (not negamax-relative) to
   match the Python original exactly.
 
+### Tablebase probing in search — DONE (Phase 4 hookup, 2026-08-06)
+
+`tb_probe.{hpp,cpp}` + `search::set_use_tablebase(bool)` (default OFF).
+`benchmarks/tb_probe_bench.cpp`, test `test_tb_probe`.
+
+- At a search node whose material is a generated table (pawnless, ≤4 men,
+  distinct pieces), `tb::probe` returns exact WDL + DTM (side-to-move relative);
+  the search converts it to its White-relative mate scale and returns it as an
+  exact cutoff. Unsupported materials (pawns, 5+ men, identical pieces, bare KK→
+  draw) fall back to the heuristic. Tables are built lazily and cached by
+  material on first probe (a 4-man build is ~seconds; every probe after is O(1)).
+- **Headline result — node reduction (fixed depth, heuristic vs probing):**
+  KRK d12 1.83M→168 (~10,900×); KQK d12 5.0M→252 (~19,900×); KQKR d10 554k→30
+  (~18,500×). The probing search also returns exact mate scores instead of fuzzy
+  material scores. Probing is OFF by default so ordinary play/tests never pay the
+  build cost.
+- **Robustness:** `chess search`/`play` now reject illegal input positions (side
+  to move able to capture the enemy king) — otherwise the mover legally "captures"
+  the exposed king and eval hits a missing-king out-of-bounds. `position_legal`
+  in `main.cpp`.
+
 ### Not-yet-built engine work
 
 - **UCI protocol** — so the engine can run in any chess GUI / play on Lichess.
   Not started; `chess play` is a simple built-in text driver for now.
-- **Tablebase probing in search** (the Phase 4 hookup) — call the tablebase at
-  leaves when material is small enough, replacing the heuristic eval with exact
-  WDL/DTM.
+- **External DTM verification** (rest of Phase 4) — spot-check generated tables
+  against Gaviota / the Lichess tablebase API.
 - **Search optimizations** (if NPS becomes a focus): fixed-size TT, staged move
-  generation, killer/history heuristics, aspiration windows.
+  generation, killer/history heuristics, aspiration windows. A latent item:
+  quiescence stand-pats even when in check (faithful to the Python original) —
+  searching evasions there would improve accuracy.
 
 ## Working agreement
 

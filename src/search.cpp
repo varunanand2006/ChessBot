@@ -7,6 +7,7 @@
 
 #include "eval.hpp"
 #include "movegen.hpp"
+#include "tb_probe.hpp"
 
 namespace search {
 
@@ -44,6 +45,25 @@ std::unordered_map<uint64_t, TTEntry> g_tt;
 std::unordered_map<uint64_t, int> g_history;
 
 uint64_t g_nodes = 0;
+bool g_use_tb = false;
+
+// If tablebase probing is on and `pos` is a supported material, set white_score
+// to the exact result on the search's White-relative mate scale and return true.
+// Converting here (not in tb_probe) keeps the probe module free of search
+// constants. Shorter mates score higher in magnitude, matching the search's own
+// mate scores, so alpha-beta orders TB results correctly.
+bool maybe_probe(const Position& pos, int& white_score) {
+    if (!g_use_tb) return false;
+    const tb::ProbeResult r = tb::probe(pos);
+    if (!r.found) return false;
+
+    int stm_score;
+    if (r.wdl == 0)      stm_score = 0;
+    else if (r.wdl > 0)  stm_score = MATE - r.dtm;   // side to move mates in r.dtm plies
+    else                 stm_score = -MATE + r.dtm;  // side to move mated in r.dtm plies
+    white_score = (pos.side_to_move == Color::White) ? stm_score : -stm_score;
+    return true;
+}
 
 int history_count(uint64_t key) {
     const auto it = g_history.find(key);
@@ -106,6 +126,8 @@ void order_moves(const Position& pos, MoveList& ml, Move first) {
 // --- Quiescence --------------------------------------------------------------
 int quiescence(Position& pos, int alpha, int beta, int qdepth) {
     ++g_nodes;
+    int tb_score;
+    if (maybe_probe(pos, tb_score)) return tb_score;  // exact endgame result
     if (qdepth == 0) return eval::evaluate(pos);
 
     const int stand_pat = eval::evaluate(pos);
@@ -161,8 +183,13 @@ int minimax(Position& pos, int depth, int alpha, int beta) {
     const int original_alpha = alpha;
     const int original_beta  = beta;
 
-    // Threefold repetition: this position already seen twice -> draw.
+    // Threefold repetition: this position already seen twice -> draw. Checked
+    // before the tablebase probe: a repetition is a draw regardless of a DTM win.
     if (history_count(pos.zobrist) >= 2) return 0;
+
+    // Exact endgame result, if available, cuts off the search here.
+    int tb_score;
+    if (maybe_probe(pos, tb_score)) return tb_score;
 
     int tt_score;
     Move tt_move;
@@ -225,6 +252,9 @@ void new_game() {
     g_tt.clear();
     g_history.clear();
 }
+
+void set_use_tablebase(bool on) { g_use_tb = on; }
+bool use_tablebase() { return g_use_tb; }
 
 void history_add(uint64_t key) { ++g_history[key]; }
 

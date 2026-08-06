@@ -106,7 +106,8 @@ add_library(chess_engine STATIC
         src/eval.cpp
         src/search.cpp
         src/tb_index.cpp
-        src/tb_solve.cpp)
+        src/tb_solve.cpp
+        src/tb_probe.cpp)
 target_link_libraries(chess_engine
         PUBLIC  chess_headers
         PRIVATE chess_project_options)
