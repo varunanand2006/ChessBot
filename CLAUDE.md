@@ -104,6 +104,9 @@ cmake --build build-debug
 # Tablebase generation baseline (positions/sec, WDL/DTM stats)
 ./build/benchmarks/tb_bench.exe
 
+# Search throughput benchmark (aggregate NPS across a position set)
+./build/benchmarks/search_bench.exe
+
 # Search: best move for a position (prints per-depth line + nodes/NPS)
 ./build/chess.exe search 6                     # startpos, depth 6
 ./build/chess.exe search 5 "4k3/8/8/8/3q4/8/8/3RK3 w - - 0 1"
@@ -268,15 +271,19 @@ CLI `chess search` / `chess play`):
   explicit White(max)/Black(min) branches over the White-relative eval;
   transposition table (exact/lower/upper bounds); quiescence over captures with
   side-aware stand-pat + delta pruning; MVV-LVA + TT/prev-best move ordering;
-  threefold-repetition via a game+search position-history map. TT + history are
-  game-global (mirroring the Python module dicts), reset by `search::new_game()`.
-  Gate = legal best move + mate-in-1 both colors + wins a hanging queen. ~4 Mnps
-  single-threaded at the moment (unoptimized; not yet a focus).
-- **Design notes:** `std::unordered_map` TT is the faithful port of the Python
-  dict — a fixed-size array TT is the standard optimization to make if/when search
-  throughput becomes a focus (the CUDA/hot-path style rules do not apply to this
-  offline-style search yet). Scores stay White-relative (not negamax-relative) to
-  match the Python original exactly.
+  threefold-repetition via a game+search position history. TT + history are
+  game-global, reset by `search::new_game()`. Gate = legal best move + mate-in-1
+  both colors + wins a hanging queen.
+- **Throughput: ~3.5 Mnps aggregate** (best-of-1, Release, single-threaded, TB
+  off), up from ~1.9 Mnps after moving the two hot-path structures off
+  `std::unordered_map` (below). `benchmarks/search_bench.exe` is the harness.
+  Reported as absolute NPS, never % speedup.
+- **Design notes:** the TT is a **fixed-size flat array** (2^22 slots, direct-
+  mapped, always-replace, full-key verification) and repetition history is the
+  **game line + a ply-indexed path array** — both replaced the original
+  `std::unordered_map` port to cut per-node hashing/allocation (the data-oriented
+  style the rest of the engine follows). Scores stay White-relative (not
+  negamax-relative) to match the Python original exactly.
 
 ### Tablebase probing in search — DONE (Phase 4 hookup, 2026-08-06)
 
@@ -314,10 +321,11 @@ this environment.
 
 - **UCI protocol** — so the engine can run in any chess GUI / play on Lichess.
   Not started; `chess play` is a simple built-in text driver for now.
-- **Search optimizations** (if NPS becomes a focus): fixed-size TT, staged move
-  generation, killer/history heuristics, aspiration windows. A latent item:
-  quiescence stand-pats even when in check (faithful to the Python original) —
-  searching evasions there would improve accuracy.
+- **Search optimizations** — flat-array TT + array repetition history are DONE
+  (~1.9→~3.5 Mnps). Remaining if NPS stays a focus: staged move generation,
+  killer/history heuristics, aspiration windows, depth-preferred TT replacement.
+  A latent accuracy item: quiescence stand-pats even when in check (faithful to
+  the Python original) — searching evasions there would improve accuracy.
 
 ## Working agreement
 

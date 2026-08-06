@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
-#include <unordered_map>
+#include <vector>
 
 #include "eval.hpp"
 #include "movegen.hpp"
@@ -26,23 +26,44 @@ constexpr int QDEPTH = 3;
 // window, stand pat (Python used 900).
 constexpr int DELTA_MARGIN = 900;
 
-// --- Transposition table (game-global, persists across moves) ----------------
+// --- Transposition table -----------------------------------------------------
+// Fixed-size, power-of-two, direct-mapped (slot = key & mask), always-replace.
+// A flat array replaces std::unordered_map: no per-node hashing, allocation, or
+// pointer chase — just one masked index. Each slot stores the full key, so a
+// collision (two positions sharing a slot) is detected on probe and treated as a
+// miss rather than returning another position's score. 2^22 slots * 16 B = 64 MB
+// — the distinct positions in our searches stay well under capacity, so useful
+// entries are rarely evicted. (A depth-preferred replacement scheme is the next
+// refinement if that changes.)
 enum TTFlag : uint8_t { TT_EXACT = 0, TT_LOWER_BOUND = 1, TT_UPPER_BOUND = 2 };
 
 struct TTEntry {
-    int     depth;
-    int     score;
-    uint8_t flag;
-    Move    best_move;
-};
+    uint64_t key;        // full position key; 0 (default) marks an empty slot
+    int32_t  score;
+    Move     best_move;  // uint16_t
+    uint8_t  depth;
+    uint8_t  flag;
+};  // 16 bytes
 
-std::unordered_map<uint64_t, TTEntry> g_tt;
+constexpr std::size_t TT_BITS = 22;
+constexpr std::size_t TT_SIZE = std::size_t{1} << TT_BITS;
+constexpr uint64_t    TT_MASK = TT_SIZE - 1;
+std::vector<TTEntry> g_tt;  // sized to TT_SIZE lazily (see ensure_tt)
 
-// Repetition history: count of every Zobrist key seen along the game line plus
-// the current search path. Mirrors the Python board.position_history dict, which
-// make/undo bump up and down — so the search sees repetitions inside its own
-// tree, not just in the played game.
-std::unordered_map<uint64_t, int> g_history;
+// Repetition history without a hash map: the game line (positions actually
+// played) plus the current search path as a ply-indexed stack that make/unmake
+// push and pop. A threefold check counts occurrences across both. The path is
+// short (<= search depth) and the game line small, so this scan is far cheaper
+// than the three unordered_map operations per node it replaces.
+constexpr int MAX_PLY = 256;
+std::vector<uint64_t> g_played;      // positions reached in the actual game
+uint64_t              g_path[MAX_PLY];
+int                   g_ply = 0;
+
+void path_push(uint64_t key) { g_path[g_ply++] = key; }
+void path_pop() { --g_ply; }
+
+void ensure_tt() { if (g_tt.empty()) g_tt.assign(TT_SIZE, TTEntry{}); }
 
 uint64_t g_nodes = 0;
 bool g_use_tb = false;
@@ -66,18 +87,19 @@ bool maybe_probe(const Position& pos, int& white_score) {
 }
 
 int history_count(uint64_t key) {
-    const auto it = g_history.find(key);
-    return it == g_history.end() ? 0 : it->second;
+    int n = 0;
+    for (int i = 0; i < g_ply; ++i) n += (g_path[i] == key);
+    for (const uint64_t k : g_played) n += (k == key);
+    return n;
 }
 
 // Returns true and sets `out_score` when the stored bound is usable at this
 // depth/window. Always exposes the stored move (out_move) for ordering.
 bool tt_lookup(uint64_t key, int depth, int alpha, int beta,
                int& out_score, Move& out_move) {
-    const auto it = g_tt.find(key);
-    if (it == g_tt.end()) { out_move = MOVE_NONE; return false; }
+    const TTEntry& e = g_tt[key & TT_MASK];
+    if (e.key != key) { out_move = MOVE_NONE; return false; }  // empty or collision
 
-    const TTEntry& e = it->second;
     out_move = e.best_move;
     if (e.depth >= depth) {
         if (e.flag == TT_EXACT) { out_score = e.score; return true; }
@@ -88,7 +110,8 @@ bool tt_lookup(uint64_t key, int depth, int alpha, int beta,
 }
 
 void tt_store(uint64_t key, int depth, int score, uint8_t flag, Move best_move) {
-    g_tt[key] = TTEntry{depth, score, flag, best_move};
+    g_tt[key & TT_MASK] = TTEntry{key, score, best_move,
+                                  static_cast<uint8_t>(depth), flag};
 }
 
 // --- Move ordering -----------------------------------------------------------
@@ -213,9 +236,9 @@ int minimax(Position& pos, int depth, int alpha, int beta) {
         int max_score = -INF;
         for (const Move m : ml) {
             StateInfo st; make_move(pos, m, st);
-            ++g_history[pos.zobrist];
+            path_push(pos.zobrist);
             const int score = minimax(pos, depth - 1, alpha, beta);
-            --g_history[pos.zobrist];
+            path_pop();
             unmake_move(pos, m, st);
             if (score > max_score) { max_score = score; best_move = m; }
             if (score > alpha) alpha = score;
@@ -230,9 +253,9 @@ int minimax(Position& pos, int depth, int alpha, int beta) {
         int min_score = INF;
         for (const Move m : ml) {
             StateInfo st; make_move(pos, m, st);
-            ++g_history[pos.zobrist];
+            path_push(pos.zobrist);
             const int score = minimax(pos, depth - 1, alpha, beta);
-            --g_history[pos.zobrist];
+            path_pop();
             unmake_move(pos, m, st);
             if (score < min_score) { min_score = score; best_move = m; }
             if (score < beta) beta = score;
@@ -249,15 +272,18 @@ int minimax(Position& pos, int depth, int alpha, int beta) {
 }  // namespace
 
 void new_game() {
-    g_tt.clear();
-    g_history.clear();
+    ensure_tt();
+    std::fill(g_tt.begin(), g_tt.end(), TTEntry{});  // wipe stale entries
+    g_played.clear();
+    g_ply = 0;
 }
 
 void set_use_tablebase(bool on) { g_use_tb = on; }
 
-void history_add(uint64_t key) { ++g_history[key]; }
+void history_add(uint64_t key) { g_played.push_back(key); }
 
 SearchResult find_best_move(Position& pos, int max_depth, bool verbose) {
+    ensure_tt();  // safety if new_game() was not called
     g_nodes = 0;
     Move best_move  = MOVE_NONE;
     int  best_score = 0;
@@ -283,9 +309,9 @@ SearchResult find_best_move(Position& pos, int max_depth, bool verbose) {
             best_score = -INF;
             for (const Move m : ml) {
                 StateInfo st; make_move(pos, m, st);
-                ++g_history[pos.zobrist];
+                path_push(pos.zobrist);
                 const int score = minimax(pos, depth - 1, alpha, beta);
-                --g_history[pos.zobrist];
+                path_pop();
                 unmake_move(pos, m, st);
                 if (score > best_score) { best_score = score; best_move = m; }
                 alpha = std::max(alpha, score);
@@ -294,9 +320,9 @@ SearchResult find_best_move(Position& pos, int max_depth, bool verbose) {
             best_score = INF;
             for (const Move m : ml) {
                 StateInfo st; make_move(pos, m, st);
-                ++g_history[pos.zobrist];
+                path_push(pos.zobrist);
                 const int score = minimax(pos, depth - 1, alpha, beta);
-                --g_history[pos.zobrist];
+                path_pop();
                 unmake_move(pos, m, st);
                 if (score < best_score) { best_score = score; best_move = m; }
                 beta = std::min(beta, score);
