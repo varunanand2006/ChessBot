@@ -34,10 +34,8 @@ struct Table {
     int passes = 0;        // sweep iterations to converge (0 for bfs)
 };
 
-inline bool is_win(int16_t v)  { return v > 0; }
-inline bool is_loss(int16_t v) { return v < 0; }
-inline int  win_dtm(int16_t v)  { return MATE - v; }   // valid when v > 0
-inline int  loss_dtm(int16_t v) { return MATE + v; }   // valid when v < 0
+inline int win_dtm(int16_t v)  { return MATE - v; }   // valid when v > 0
+inline int loss_dtm(int16_t v) { return MATE + v; }   // valid when v < 0
 
 Table solve_sweep(const Index& idx);
 Table solve_bfs(const Index& idx);

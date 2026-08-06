@@ -48,7 +48,6 @@ public:
     std::size_t size() const { return dense_to_code_.size(); }
     int         men() const { return men_; }
     const std::vector<Piece>& extras() const { return extras_; }
-    PieceType   white_piece() const { return extras_[0].type; }  // valid for KXK
 
     // Dense index <-> position.
     Position    decode(std::size_t index) const;

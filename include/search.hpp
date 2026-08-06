@@ -38,7 +38,6 @@ void new_game();
 // default so ordinary searches never pay the table build cost; the endgame
 // benchmark and its test turn it on explicitly.
 void set_use_tablebase(bool on);
-bool use_tablebase();
 
 // Record a position actually reached in the game (call once per real move,
 // including the initial position) so the search can see threefold repetitions.

@@ -254,7 +254,6 @@ void new_game() {
 }
 
 void set_use_tablebase(bool on) { g_use_tb = on; }
-bool use_tablebase() { return g_use_tb; }
 
 void history_add(uint64_t key) { ++g_history[key]; }
 

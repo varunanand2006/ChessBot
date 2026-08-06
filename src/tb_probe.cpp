@@ -20,7 +20,6 @@ struct Entry {
 };
 
 std::unordered_map<uint64_t, std::unique_ptr<Entry>> g_cache;
-uint64_t g_tables_built = 0;
 
 // Decompose a position into the tablebase's extra-piece list, in a canonical
 // order (piece type ascending, then White before Black). Returns false — meaning
@@ -60,7 +59,6 @@ Entry& get_or_build(uint64_t key, const std::vector<Piece>& extras) {
 
     Index idx(extras);
     Table tbl = solve_sweep(idx);  // same solver the DAG uses; matches solve_bfs
-    ++g_tables_built;
 
     auto entry = std::make_unique<Entry>(Entry{std::move(idx), std::move(tbl)});
     Entry& ref = *entry;
@@ -81,9 +79,5 @@ ProbeResult probe(const Position& pos) {
     if (v > 0)  return {true, +1, win_dtm(v)};
     return {true, -1, loss_dtm(v)};
 }
-
-uint64_t tables_built() { return g_tables_built; }
-
-void clear() { g_cache.clear(); }
 
 }  // namespace tb

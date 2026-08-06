@@ -62,16 +62,13 @@ bool Index::legal(const std::vector<Piece>& extras, const int* squares, Color st
     // Kings never adjacent.
     if (attacks::king(static_cast<Square>(wk)) & square_bb(static_cast<Square>(bk))) return false;
 
-    // The side NOT to move must not be in check: its king must not be attacked
-    // by any piece of the side to move.
-    const Color defender = ~stm;
-    const int   dksq = (defender == Color::White) ? wk : bk;
+    // The side NOT to move must not be in check by any of the mover's pieces.
+    // The mover's king can't be the checker — adjacent kings were excluded above
+    // — so only the mover's extra pieces need testing.
+    const int dksq = (~stm == Color::White) ? wk : bk;
 
     Bitboard occ = 0;
     for (int i = 0; i < men; ++i) occ |= square_bb(static_cast<Square>(squares[i]));
-
-    const int aksq = (stm == Color::White) ? wk : bk;  // attacker (mover) king
-    if (attacks::king(static_cast<Square>(aksq)) & square_bb(static_cast<Square>(dksq))) return false;
 
     for (std::size_t e = 0; e < extras.size(); ++e) {
         if (extras[e].color != stm) continue;

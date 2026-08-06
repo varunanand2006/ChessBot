@@ -1,7 +1,5 @@
 #include "tb_solve.hpp"
 
-#include <cstdio>
-#include <cstdlib>
 #include <functional>
 #include <optional>
 #include <queue>

@@ -20,8 +20,6 @@
 
 #pragma once
 
-#include <cstdint>
-
 #include "position.hpp"
 
 namespace tb {
@@ -32,14 +30,8 @@ struct ProbeResult {
     int  dtm   = 0;      // plies to mate (deliver if win / be mated if loss); 0 if draw
 };
 
-// Probe `pos`. Builds+caches the material's table on first use.
+// Probe `pos`. Builds+caches the material's table on first use. Cached tables
+// persist for the life of the process, reused across games.
 ProbeResult probe(const Position& pos);
-
-// Number of distinct material tables built so far (for benchmarking/warmup).
-uint64_t tables_built();
-
-// Drop all cached tables (free memory). Cached tables otherwise persist for the
-// life of the process, reused across games.
-void clear();
 
 }  // namespace tb

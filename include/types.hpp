@@ -75,8 +75,6 @@ constexpr Square make_square(int file, int rank) {
 constexpr int file_of(Square s) { return sq_index(s) & 7; }
 constexpr int rank_of(Square s) { return sq_index(s) >> 3; }
 
-constexpr bool is_valid(Square s) { return sq_index(s) < NUM_SQUARES; }
-
 // Single-bit bitboard for a square.
 constexpr Bitboard square_bb(Square s) {
     return Bitboard{1} << sq_index(s);
