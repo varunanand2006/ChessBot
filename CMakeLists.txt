@@ -102,7 +102,9 @@ add_library(chess_engine STATIC
         src/position.cpp
         src/slider.cpp
         src/movegen.cpp
-        src/perft.cpp)
+        src/perft.cpp
+        src/tb_index.cpp
+        src/tb_solve.cpp)
 target_link_libraries(chess_engine
         PUBLIC  chess_headers
         PRIVATE chess_project_options)

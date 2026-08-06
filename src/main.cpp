@@ -14,6 +14,9 @@
 #include "perft.hpp"
 #include "position.hpp"
 #include "slider.hpp"
+#include "tb_index.hpp"
+#include "tb_solve.hpp"
+#include "types.hpp"
 
 namespace {
 
@@ -52,6 +55,45 @@ int run_perft(int argc, char** argv, bool divide) {
     return 0;
 }
 
+// Parse a single white-piece letter into a PieceType for the 3-man tablebase.
+bool parse_piece(const char* s, PieceType& pt) {
+    if (!s || s[0] == '\0' || s[1] != '\0') return false;
+    switch (s[0]) {
+        case 'Q': case 'q': pt = PieceType::Queen;  return true;
+        case 'R': case 'r': pt = PieceType::Rook;   return true;
+        case 'B': case 'b': pt = PieceType::Bishop; return true;
+        case 'N': case 'n': pt = PieceType::Knight; return true;
+        default: return false;
+    }
+}
+
+int run_tb(int argc, char** argv) {
+    PieceType wp;
+    if (argc < 3 || !parse_piece(argv[2], wp)) {
+        std::fprintf(stderr, "usage: chess tb <Q|R|B|N>\n");
+        return 1;
+    }
+
+    tb::Index idx(wp);
+    const tb::Table t = tb::solve_sweep(idx);
+
+    // type_index order: Pawn0 Knight1 Bishop2 Rook3 Queen4 -> letter table below.
+    std::printf("K%cK  indices=%zu  W=%zu L=%zu D=%zu  maxWinDTM=%d plies (%d moves)\n",
+                " NBRQ"[type_index(wp)], idx.size(), t.wins, t.losses, t.draws,
+                t.max_win_dtm, (t.max_win_dtm + 1) / 2);
+
+    // Show a deepest-forced-mate position (the hardest win) as a concrete,
+    // externally-verifiable FEN. Longest mate => smallest positive value.
+    if (t.wins > 0) {
+        std::size_t deepest = 0;
+        for (std::size_t i = 0; i < t.value.size(); ++i)
+            if (t.value[i] > 0 && tb::win_dtm(t.value[i]) == t.max_win_dtm) { deepest = i; break; }
+        std::printf("deepest win (%d-ply mate): %s\n",
+                    t.max_win_dtm, to_fen(idx.decode(deepest)).c_str());
+    }
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -59,10 +101,12 @@ int main(int argc, char** argv) {
 
     if (argc >= 3 && std::strcmp(argv[1], "perft") == 0)  return run_perft(argc, argv, false);
     if (argc >= 3 && std::strcmp(argv[1], "divide") == 0) return run_perft(argc, argv, true);
+    if (argc >= 2 && std::strcmp(argv[1], "tb") == 0)     return run_tb(argc, argv);
 
     std::printf("ChessEngine v0.1.0\n");
     std::printf("usage:\n");
     std::printf("  chess perft  <depth> [FEN...]\n");
     std::printf("  chess divide <depth> [FEN...]\n");
+    std::printf("  chess tb     <Q|R|B|N>\n");
     return 0;
 }

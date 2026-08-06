@@ -39,3 +39,13 @@ target_link_libraries(test_perft PRIVATE chess_engine chess_project_options)
 add_test(NAME perft COMMAND test_perft)
 add_test(NAME perft_deep COMMAND test_perft deep)
 set_tests_properties(perft_deep PROPERTIES TIMEOUT 300 LABELS deep)
+
+# Phase 2 / Step 2.1: tablebase position indexing bijection + symmetry.
+add_executable(test_tb_index test_tb_index.cpp)
+target_link_libraries(test_tb_index PRIVATE chess_engine chess_project_options)
+add_test(NAME tb_index COMMAND test_tb_index)
+
+# Phase 2 / Step 2.2: retrograde DTM solver — two solvers must agree.
+add_executable(test_tb_solve test_tb_solve.cpp)
+target_link_libraries(test_tb_solve PRIVATE chess_engine chess_project_options)
+add_test(NAME tb_solve COMMAND test_tb_solve)
