@@ -9,8 +9,14 @@
 // have no checkmate positions at all -> every position is a draw. KQK and KRK
 // can force mate -> wins and losses exist, and the count of White-mates equals
 // the count of Black-mates by color symmetry of the material.
+//
+// The "slow" tier adds the first true 4-man table, KQKR, whose captures exit
+// into the 3-man sub-tables (QxR->KQK, RxQ->KRK) rather than a draw. The same
+// two-solver agreement is the gate; it also exercises the material-DAG probe.
 
 #include <cstdio>
+#include <cstring>
+#include <vector>
 
 #include "slider.hpp"
 #include "tb_index.hpp"
@@ -22,12 +28,11 @@ namespace {
 int g_failures = 0;
 void fail(const char* m) { std::printf("[FAIL] %s\n", m); ++g_failures; }
 
-void test_piece(PieceType wp, const char* name, bool expect_wins) {
-    tb::Index idx(wp);
+// Run both solvers on a material and require value-for-value agreement.
+tb::Table check_agree(const tb::Index& idx, const char* name) {
     const tb::Table a = tb::solve_sweep(idx);
     const tb::Table b = tb::solve_bfs(idx);
 
-    // Solvers must agree on every value.
     bool agree = (a.value.size() == b.value.size());
     if (agree) {
         for (std::size_t i = 0; i < a.value.size(); ++i)
@@ -35,11 +40,15 @@ void test_piece(PieceType wp, const char* name, bool expect_wins) {
     }
     if (!agree) fail("sweep and bfs disagree");
 
-    // WDL / DTM statistics (from the sweep; identical to bfs when agree holds).
-    std::printf("%-4s  N=%zu  W=%zu L=%zu D=%zu  maxWinDTM=%d maxLossDTM=%d  %s\n",
+    std::printf("%-5s  N=%zu  W=%zu L=%zu D=%zu  maxWinDTM=%d maxLossDTM=%d  %s\n",
                 name, a.value.size(), a.wins, a.losses, a.draws,
                 a.max_win_dtm, a.max_loss_dtm, agree ? "[agree]" : "[DISAGREE]");
+    return a;
+}
 
+void test_piece(PieceType wp, const char* name, bool expect_wins) {
+    tb::Index idx(wp);
+    const tb::Table a = check_agree(idx, name);
     if (expect_wins) {
         if (a.wins == 0)   fail("expected wins but found none");
         if (a.losses == 0) fail("expected losses but found none");
@@ -52,14 +61,33 @@ void test_piece(PieceType wp, const char* name, bool expect_wins) {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     slider::init();
+    const bool slow = (argc >= 2 && std::strcmp(argv[1], "slow") == 0);
+
     test_piece(PieceType::Queen,  "KQK", /*expect_wins=*/true);
     test_piece(PieceType::Rook,   "KRK", /*expect_wins=*/true);
     test_piece(PieceType::Bishop, "KBK", /*expect_wins=*/false);
     test_piece(PieceType::Knight, "KNK", /*expect_wins=*/false);
 
-    if (g_failures == 0) { std::printf("\nAll retrograde solver tests passed.\n"); return 0; }
+    if (slow) {
+        std::printf("--- slow (4-man, material-DAG) ---\n");
+        using PT = PieceType;
+        // KQKR: the strong side (Q) is winning in general but the rook gives real
+        // counterplay, so both wins and losses must exist for both colors.
+        const tb::Index kqkr({{Color::White, PT::Queen}, {Color::Black, PT::Rook}});
+        const tb::Table t = check_agree(kqkr, "KQKR");
+        if (t.wins == 0)   fail("KQKR: expected wins");
+        if (t.losses == 0) fail("KQKR: expected losses");
+        // Sub-table exits must actually be reachable/used: a pure-draw result
+        // would mean the DAG probe collapsed to the old capture=draw behavior.
+        if (t.draws == t.value.size()) fail("KQKR: all draws (DAG probe not engaged)");
+    }
+
+    if (g_failures == 0) {
+        std::printf("\nAll retrograde solver tests passed%s.\n", slow ? " (incl. 4-man)" : "");
+        return 0;
+    }
     std::printf("\n%d retrograde solver test(s) failed.\n", g_failures);
     return 1;
 }

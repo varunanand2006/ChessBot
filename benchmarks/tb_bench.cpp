@@ -29,10 +29,12 @@ double secs_since(std::chrono::steady_clock::time_point t0) {
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 }
 
-void run(PieceType wp, const char* name) {
-    // Build the index (timed separately from solving).
+void run(std::vector<tb::Piece> extras, const char* name) {
+    // Build the index (timed separately from solving). For 4-man materials the
+    // solve time below includes recursively solving the 3-man sub-tables the
+    // captures probe — that is the honest end-to-end generation cost.
     const auto ti0 = std::chrono::steady_clock::now();
-    tb::Index idx(wp);
+    tb::Index idx(std::move(extras));
     const double index_secs = secs_since(ti0);
     const std::size_t N = idx.size();
 
@@ -81,10 +83,13 @@ void run(PieceType wp, const char* name) {
 
 int main() {
     slider::init();
+    using PT = PieceType;
     std::printf("Tablebase generation baseline (single-threaded, Release)\n\n");
-    run(PieceType::Queen,  "KQK");
-    run(PieceType::Rook,   "KRK");
-    run(PieceType::Bishop, "KBK");
-    run(PieceType::Knight, "KNK");
+    run({{Color::White, PT::Queen}},  "KQK");
+    run({{Color::White, PT::Rook}},   "KRK");
+    run({{Color::White, PT::Bishop}}, "KBK");
+    run({{Color::White, PT::Knight}}, "KNK");
+    // First 4-man material (DAG solve, incl. its 3-man sub-tables).
+    run({{Color::White, PT::Queen}, {Color::Black, PT::Rook}}, "KQKR");
     return 0;
 }

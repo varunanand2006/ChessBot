@@ -40,12 +40,28 @@ add_test(NAME perft COMMAND test_perft)
 add_test(NAME perft_deep COMMAND test_perft deep)
 set_tests_properties(perft_deep PROPERTIES TIMEOUT 300 LABELS deep)
 
+# Evaluation: structural invariants (start = 0, color-swap antisymmetry).
+add_executable(test_eval test_eval.cpp)
+target_link_libraries(test_eval PRIVATE chess_engine chess_project_options)
+add_test(NAME eval COMMAND test_eval)
+
+# Search: legal best move, mate-in-1 both colors, wins a hanging piece.
+add_executable(test_search test_search.cpp)
+target_link_libraries(test_search PRIVATE chess_engine chess_project_options)
+add_test(NAME search COMMAND test_search)
+
 # Phase 2 / Step 2.1: tablebase position indexing bijection + symmetry.
+# Fast tier = 3-man; slow tier adds 4-man (millions of positions).
 add_executable(test_tb_index test_tb_index.cpp)
 target_link_libraries(test_tb_index PRIVATE chess_engine chess_project_options)
 add_test(NAME tb_index COMMAND test_tb_index)
+add_test(NAME tb_index_4man COMMAND test_tb_index slow)
+set_tests_properties(tb_index_4man PROPERTIES TIMEOUT 300 LABELS deep)
 
 # Phase 2 / Step 2.2: retrograde DTM solver — two solvers must agree.
+# Fast tier = 3-man; slow tier adds the first 4-man material-DAG table (KQKR).
 add_executable(test_tb_solve test_tb_solve.cpp)
 target_link_libraries(test_tb_solve PRIVATE chess_engine chess_project_options)
 add_test(NAME tb_solve COMMAND test_tb_solve)
+add_test(NAME tb_solve_4man COMMAND test_tb_solve slow)
+set_tests_properties(tb_solve_4man PROPERTIES TIMEOUT 300 LABELS deep)

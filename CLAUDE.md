@@ -97,6 +97,22 @@ cmake --build build-debug
 
 # NPS benchmark (best-of-N; N defaults to 1)
 ./build/benchmarks/bench.exe 3
+
+# Tablebase: inspect a 3-man endgame (WDL + deepest-mate FEN)
+./build/chess.exe tb R          # KRK; also Q, B, N
+
+# Tablebase generation baseline (positions/sec, WDL/DTM stats)
+./build/benchmarks/tb_bench.exe
+
+# Search: best move for a position (prints per-depth line + nodes/NPS)
+./build/chess.exe search 6                     # startpos, depth 6
+./build/chess.exe search 5 "4k3/8/8/8/3q4/8/8/3RK3 w - - 0 1"
+
+# Play a game vs the engine (you are White). Optional depth + FEN.
+./build/chess.exe play 4
+
+# Regenerate the eval tables from the Python Texel constants (one-off)
+python python/gen_eval_tables.py > src/eval_tables.inc
 ```
 
 ---
@@ -147,20 +163,120 @@ cmake --build build-debug
   case handled explicitly (transit-square attack test).
 - **Perft bulk counting** at the last ply (return move count without make/unmake).
 
+### Phase 2 (CPU tablebase) status — 3-man and 4-man COMPLETE
+
+Single-threaded CPU retrograde analysis: the correctness oracle and performance
+baseline for the CUDA phase. Files: `tb_index.{hpp,cpp}`, `tb_solve.{hpp,cpp}`,
+`benchmarks/tb_bench.cpp`, tests `test_tb_index`/`test_tb_solve`.
+
+- **Indexing** (`tb::Index`): bijective dense `index <-> position` for pawnless
+  material (two kings + a list of `Piece{color,type}` extras), 8-fold D4
+  symmetry. Canonical = min raw code over the 8 transforms (the unimpeachable
+  reference). Gate = partition test (orbit sizes sum to the enumerated
+  legal-position count) + symmetry invariance — passes for 3-man and 4-man
+  (KQKR = 2.47M indices, KRKN, KRBK). `test_tb_index slow` runs the 4-man tier.
+- **Solver** (`solve_sweep`, `solve_bfs`): two independent DTM solvers that must
+  agree. `solve_sweep` = iterated negamax fixpoint (the GPU dense-sweep shape);
+  `solve_bfs` = min-priority-queue retrograde over the reverse graph. mate-score
+  int16 encoding (+win / −loss / 0 draw). Handles **3-man AND 4-man** via a
+  material-DAG (below). 3-man theory: KQK mate-in-10, KRK mate-in-16; KBK/KNK all
+  draws. First 4-man: **KQKR = mate-in-35** (69 plies, both solvers agree over
+  all 2.47M positions) — matches the known Nalimov KQvKR maximum; KRKN mostly
+  drawn (2.09M/2.92M) as theory predicts.
+- **Material-DAG solver** (the 4-man step): a 4-man capture removes exactly one
+  extra (kings are never captured) and lands in a *3-man sub-table* — KQKR:
+  `QxR`→KQK, `RxQ`→a KRK that keeps Black's rook (the indexer is color-general,
+  so the sub-material is built with its real colors; no color-flip bookkeeping).
+  `solve_material` solves every sub-material first (recursively, same solver) and
+  the graph builder probes them as **fixed boundary values** on capture edges
+  instead of calling every capture a draw. 3-man is the base case (its only
+  capture exits to bare KK = draw), so old 3-man numbers are reproduced exactly.
+- **Baseline:** 3-man ~0.6M positions/sec; KQKR (4-man, incl. its 3-man
+  sub-tables) ~0.46M positions/sec, ~15M position-updates/sec, 33 passes,
+  single-threaded Release. `chess tb <material>` (e.g. `KQKR`, `KRKN`) prints
+  WDL + a deepest-mate FEN; `test_tb_solve slow` / ctest `tb_solve_4man` is the
+  4-man gate.
+
+Key Phase 2 decisions: iterated forward sweep (not explicit unmove generation)
+to match the GPU "dense sweep to convergence" shape and reuse Phase 1 movegen;
+table-based canonicalization (not closed-form king-triangle) for correctness,
+reusable by the GPU as device index tables; DAG recursion probes solved
+sub-tables as boundary values (true DTM across material boundaries, not DTC);
+BFS uses a min-priority-queue (not the old 3-man FIFO) because capture-exits
+inject win/loss results at arbitrary DTM, out of natural discovery order;
+`std::vector` allowed here (offline gen, not the search hot path).
+
+### >>> PICK UP HERE <<<
+
+Next candidate steps (pick per goal — GPU relevance vs. table coverage):
+- **External verification (Phase 4 seed):** spot-check generated DTM against
+  Gaviota (DTM metric) or the Lichess tablebase API — e.g. the KQKR deepest FEN
+  `8/8/8/8/2r5/8/2k5/K6Q w - - 0 1` should be mate-in-35. Cheap confidence before
+  committing to the GPU port.
+- **5-man** needs *arithmetic combinatorial* indexing (direct 64^men table is
+  ~134MB at 4 men, far too big at 5). This is the natural next indexer step and
+  what makes the workload genuinely GPU-worthy.
+- **Identical-piece materials** (e.g. KRRK, KQKQ) need unordered indexing; the
+  CLI already rejects them with a clear message.
+- **Pawns:** reduce symmetry (verify the CLAUDE "4-fold" claim — pawns leave only
+  the left-right mirror = 2-fold spatially) and add promotion/capture DAG edges.
+- **GPU (Phase 3)** needs a rented NVIDIA GPU with root (for Nsight perf
+  counters); budget ~$10, plan = compile locally, short RunPod/Vast burst to run
+  + profile. Worth it once 4/5-man tables exist (3-man is too small).
+
 ---
 
 ## Later phases (context — not started)
 
-- **Phase 2:** Bijective position indexing with symmetry reduction (8-fold king
-  triangle for pawnless configs, 4-fold with pawns). Single-threaded CPU
-  retrograde analysis as correctness oracle and performance baseline.
 - **Phase 3:** CUDA retrograde sweep kernels. Device-side move/unmove generation,
   per-pass DTM update, convergence reduction. Profile with Nsight Compute; target
-  achieved memory bandwidth as the headline metric.
-- **Phase 4:** Verify generated tables against Syzygy or Gaviota. Integrate
-  tablebase probing into leaf evaluation; measure node-count reduction.
+  achieved memory bandwidth as the headline metric. (Needs 4/5-man tables to be
+  worth a GPU — 3-man is too small.) `/cuda` does not exist yet.
+- **Phase 4:** Verify generated tables against Syzygy or Gaviota (Gaviota = DTM,
+  the matching metric). Integrate tablebase probing into leaf evaluation; measure
+  node-count reduction. The C++ search + evaluation now exist (below), so the
+  remaining Phase 4 work is the probe hookup + measurement.
 - **Phase 5 (stretch):** Use the tablebase as a perfect-play oracle to measure how
-  often alpha-beta selects an optimal move at fixed node budgets.
+  often alpha-beta selects an optimal move at fixed node budgets. Also needs the
+  search.
+
+### Engine (search + evaluation) — PORTED from Python (2026-08-06)
+
+A faithful port of `python/search.py` + `python/constants.py`, same shape and
+heuristics (`eval.{hpp,cpp}`, `search.{hpp,cpp}`, tests `test_eval`/`test_search`,
+CLI `chess search` / `chess play`):
+
+- **Evaluation** (`eval::evaluate`, White-relative): material + piece-square
+  tables + in-check penalty + endgame king-distance term. The blended Texel
+  values live in `src/eval_tables.inc`, **generated** from the Python constants by
+  `python/gen_eval_tables.py` (byte-for-byte, no hand transcription; re-run to
+  regenerate). One deliberate deviation from the port: total material is summed
+  in full before the middlegame/endgame king-table pick, fixing the Python
+  single-pass order dependence. Gate = start position == 0 + color-swap/mirror
+  antisymmetry + material dominance.
+- **Search** (`search::find_best_move`): iterative-deepening alpha-beta as
+  explicit White(max)/Black(min) branches over the White-relative eval;
+  transposition table (exact/lower/upper bounds); quiescence over captures with
+  side-aware stand-pat + delta pruning; MVV-LVA + TT/prev-best move ordering;
+  threefold-repetition via a game+search position-history map. TT + history are
+  game-global (mirroring the Python module dicts), reset by `search::new_game()`.
+  Gate = legal best move + mate-in-1 both colors + wins a hanging queen. ~4 Mnps
+  single-threaded at the moment (unoptimized; not yet a focus).
+- **Design notes:** `std::unordered_map` TT is the faithful port of the Python
+  dict — a fixed-size array TT is the standard optimization to make if/when search
+  throughput becomes a focus (the CUDA/hot-path style rules do not apply to this
+  offline-style search yet). Scores stay White-relative (not negamax-relative) to
+  match the Python original exactly.
+
+### Not-yet-built engine work
+
+- **UCI protocol** — so the engine can run in any chess GUI / play on Lichess.
+  Not started; `chess play` is a simple built-in text driver for now.
+- **Tablebase probing in search** (the Phase 4 hookup) — call the tablebase at
+  leaves when material is small enough, replacing the heuristic eval with exact
+  WDL/DTM.
+- **Search optimizations** (if NPS becomes a focus): fixed-size TT, staged move
+  generation, killer/history heuristics, aspiration windows.
 
 ## Working agreement
 

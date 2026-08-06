@@ -1,25 +1,24 @@
-// Phase 2 — bijective position indexing for a 3-man pawnless endgame.
+// Phase 2 — bijective position indexing for pawnless endgames (generalized).
 //
-// Material: White King, one White piece (Rook/Queen/Bishop/Knight), Black King.
-// The board's 8-element symmetry group (D4: the reflections/rotations of a
-// square) is used to fold the index space ~8x. Both sides-to-move are distinct
-// positions (distance-to-mate depends on who moves), so the index carries stm.
+// Material = two kings + a list of extra pieces, each tagged with a color and
+// type (e.g. KQKR = extras {White Queen, Black Rook}; KRRK would be two White
+// Rooks). The board's 8-element symmetry group (D4) folds the index space ~8x.
+// Both sides-to-move are distinct positions.
 //
-// Correctness approach (correctness-first, mirroring the magic-vs-reference
-// discipline from Phase 1): the canonical representative of a position is
-// DEFINED as the minimum raw code over all 8 symmetry transforms. That
-// definition is obviously a bijection between dense indices and orbits, so the
-// index is correct by construction; the test then verifies the whole mapping
-// with a partition check that relies on no externally-recalled constants.
+// Correctness is by construction (as in the 3-man version): the canonical
+// representative of a position is the minimum raw code over the 8 symmetry
+// transforms, which is trivially a bijection between dense indices and orbits.
+// The test verifies it with a partition check needing no recalled constants.
 //
-// A closed-form "king triangle" arithmetic index would use less memory than the
-// lookup tables here, but the table-based canonicalization is the unimpeachable
-// baseline and is exactly what the GPU can also use (index tables in device
-// memory). Optimize to closed-form later only if the tables prove too large.
+// Scope of THIS implementation:
+//   * Pawnless only (full 8-fold symmetry). Pawns reduce symmetry and add
+//     promotion/capture cross-table dependencies — a later step.
+//   * Direct lookup tables sized 64^men. Practical through 4 men (~134 MB);
+//     5+ men needs arithmetic (combinatorial) indexing instead — a later step.
+//   * Extra pieces must have DISTINCT (color,type). Identical pieces (e.g. two
+//     white rooks) need unordered/combinatorial handling — a later step.
 //
-// std::vector is used for the (runtime-sized) tables: this is offline tablebase
-// setup, not the search hot path, so heap here does not violate the engine's
-// no-heap-below-search rule.
+// std::vector is fine here: offline tablebase setup, not the search hot path.
 
 #pragma once
 
@@ -32,32 +31,42 @@
 
 namespace tb {
 
+struct Piece {
+    Color     color;
+    PieceType type;
+};
+
 class Index {
 public:
-    // white_piece must be Rook, Queen, Bishop, or Knight (not Pawn/King).
+    // General pawnless material. `extras` are the non-king pieces; they must
+    // have distinct (color,type) pairs, and 2 + extras.size() must be <= 4.
+    explicit Index(std::vector<Piece> extras);
+
+    // Convenience: 3-man KXK (a single White piece).
     explicit Index(PieceType white_piece);
 
     std::size_t size() const { return dense_to_code_.size(); }
-    PieceType   white_piece() const { return white_piece_; }
+    int         men() const { return men_; }
+    const std::vector<Piece>& extras() const { return extras_; }
+    PieceType   white_piece() const { return extras_[0].type; }  // valid for KXK
 
-    // Is this raw square assignment a legal position of the material class for
-    // the given side to move? Legality is symmetry-invariant.
-    static bool legal(PieceType wp, int wk, int pc, int bk, Color stm);
-
-    // Dense index -> a concrete canonical Position (castling/ep cleared, key set).
-    Position decode(std::size_t index) const;
-
-    // Any legal position of this class -> its dense index.
+    // Dense index <-> position.
+    Position    decode(std::size_t index) const;
     std::size_t encode(const Position& pos) const;
 
-    // Raw-square form of encode (used internally and by tests).
-    std::size_t encode_raw(int wk, int pc, int bk, Color stm) const;
+    // Raw-square interface (slot order: [wk, bk, extra0, extra1, ...]). Used by
+    // tools and the bijection test. `squares` points to men() ints.
+    static bool legal(const std::vector<Piece>& extras, const int* squares, Color stm);
+    Position    make_position(const int* squares, Color stm) const;
+    std::size_t encode_squares(const int* squares, Color stm) const;
+    void        raw_squares(std::size_t index, int* out) const;  // fills men() ints
+    Color       side_to_move(std::size_t index) const;
 
 private:
-    // Minimum spatial code (wk,pc,bk packed) over the 8 symmetry transforms.
-    static uint32_t canonical_spatial(int wk, int pc, int bk);
+    uint32_t canonical_spatial(const int* squares) const;
 
-    PieceType             white_piece_;
+    int                   men_;
+    std::vector<Piece>    extras_;
     std::vector<uint32_t> dense_to_code_;  // index -> canonical combined code
     std::vector<int32_t>  code_to_dense_;  // combined code -> index, or -1
 };

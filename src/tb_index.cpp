@@ -1,5 +1,8 @@
 #include "tb_index.hpp"
 
+#include <cstdio>
+#include <cstdlib>
+
 #include "attacks.hpp"
 #include "bitboard.hpp"
 #include "slider.hpp"
@@ -8,17 +11,9 @@ namespace tb {
 
 namespace {
 
-// The 8 elements of D4 as square permutations, indexed [transform][square].
-// Built once. Each transform maps (file,rank) as follows:
-//   0 identity        (f, r)
-//   1 mirror file     (7-f, r)
-//   2 mirror rank     (f, 7-r)
-//   3 rotate 180      (7-f, 7-r)
-//   4 main diagonal   (r, f)
-//   5 anti-diagonal   (7-r, 7-f)
-//   6 rotate 90       (r, 7-f)
-//   7 rotate 270      (7-r, f)
-// These are precisely the symmetries that leave a pawnless board equivalent.
+// The 8 elements of D4 as square permutations [transform][square]. See the
+// 3-man version for the (file,rank) formulas; these are the symmetries that
+// leave a pawnless board equivalent.
 int SYM[8][64];
 bool g_sym_ready = false;
 
@@ -40,118 +35,150 @@ void init_sym() {
     g_sym_ready = true;
 }
 
-// Attack set of the single white piece from square pc under occupancy occ.
-Bitboard white_piece_attacks(PieceType wp, int pc, Bitboard occ) {
-    const Square s = static_cast<Square>(pc);
-    switch (wp) {
+Bitboard piece_attacks(PieceType pt, int sq, Bitboard occ) {
+    const Square s = static_cast<Square>(sq);
+    switch (pt) {
         case PieceType::Rook:   return slider::rook_attacks(s, occ);
         case PieceType::Bishop: return slider::bishop_attacks(s, occ);
         case PieceType::Queen:  return slider::queen_attacks(s, occ);
         case PieceType::Knight: return attacks::knight(s);
-        default:                return 0;
+        case PieceType::King:   return attacks::king(s);
+        default:                return 0;  // pawns unsupported here
     }
 }
 
 }  // namespace
 
-bool Index::legal(PieceType wp, int wk, int pc, int bk, Color stm) {
-    // Distinct squares.
-    if (wk == pc || wk == bk || pc == bk) return false;
+bool Index::legal(const std::vector<Piece>& extras, const int* squares, Color stm) {
+    const int men = 2 + static_cast<int>(extras.size());
+
+    // All squares distinct.
+    for (int i = 0; i < men; ++i)
+        for (int j = i + 1; j < men; ++j)
+            if (squares[i] == squares[j]) return false;
+
+    const int wk = squares[0], bk = squares[1];
 
     // Kings never adjacent.
     if (attacks::king(static_cast<Square>(wk)) & square_bb(static_cast<Square>(bk))) return false;
 
-    // The side NOT to move must not be in check. If White is to move, Black just
-    // moved, so the Black king must not be attacked by White. (If Black is to
-    // move, the only White attacker of the White king would be adjacency, which
-    // is already excluded — so no extra test is needed.)
-    if (stm == Color::White) {
-        const Bitboard occ = square_bb(static_cast<Square>(wk)) |
-                             square_bb(static_cast<Square>(pc)) |
-                             square_bb(static_cast<Square>(bk));
-        if (white_piece_attacks(wp, pc, occ) & square_bb(static_cast<Square>(bk))) return false;
+    // The side NOT to move must not be in check: its king must not be attacked
+    // by any piece of the side to move.
+    const Color defender = ~stm;
+    const int   dksq = (defender == Color::White) ? wk : bk;
+
+    Bitboard occ = 0;
+    for (int i = 0; i < men; ++i) occ |= square_bb(static_cast<Square>(squares[i]));
+
+    const int aksq = (stm == Color::White) ? wk : bk;  // attacker (mover) king
+    if (attacks::king(static_cast<Square>(aksq)) & square_bb(static_cast<Square>(dksq))) return false;
+
+    for (std::size_t e = 0; e < extras.size(); ++e) {
+        if (extras[e].color != stm) continue;
+        if (piece_attacks(extras[e].type, squares[2 + e], occ) &
+            square_bb(static_cast<Square>(dksq)))
+            return false;
     }
     return true;
 }
 
-uint32_t Index::canonical_spatial(int wk, int pc, int bk) {
+uint32_t Index::canonical_spatial(const int* squares) const {
     uint32_t best = 0xFFFFFFFFu;
     for (int g = 0; g < 8; ++g) {
-        const uint32_t code =
-            (static_cast<uint32_t>(SYM[g][wk]) * 64u + static_cast<uint32_t>(SYM[g][pc])) * 64u +
-            static_cast<uint32_t>(SYM[g][bk]);
+        uint32_t code = 0;
+        for (int i = 0; i < men_; ++i)
+            code = code * 64u + static_cast<uint32_t>(SYM[g][squares[i]]);
         if (code < best) best = code;
     }
     return best;
 }
 
-Index::Index(PieceType white_piece) : white_piece_(white_piece) {
+Index::Index(std::vector<Piece> extras) : extras_(std::move(extras)) {
+    men_ = 2 + static_cast<int>(extras_.size());
+    if (men_ > 4) {
+        // Direct 64^men table is too large beyond 4 men; needs arithmetic
+        // combinatorial indexing (a later step).
+        std::fprintf(stderr, "tb::Index: %d men unsupported (direct table too large)\n", men_);
+        std::abort();
+    }
+
     init_sym();
     slider::init();  // legality checks for sliders need the magic tables
 
-    // Combined code space: spatial (64^3) x side-to-move (2).
-    constexpr int CODE_SPACE = 64 * 64 * 64 * 2;
-    code_to_dense_.assign(CODE_SPACE, -1);
+    uint64_t spatial_space = 1;
+    for (int i = 0; i < men_; ++i) spatial_space *= 64;
+    code_to_dense_.assign(static_cast<std::size_t>(spatial_space) * 2, -1);
 
-    // Enumerate canonical, legal representatives and assign dense indices.
-    // Because legality is symmetry-invariant, testing the canonical rep decides
-    // the whole orbit, so we only enroll orbit minima.
+    int sq[4];
     for (int stm_bit = 0; stm_bit < 2; ++stm_bit) {
         const Color stm = (stm_bit == 0) ? Color::White : Color::Black;
-        for (int wk = 0; wk < 64; ++wk) {
-            for (int pc = 0; pc < 64; ++pc) {
-                for (int bk = 0; bk < 64; ++bk) {
-                    if (!legal(white_piece_, wk, pc, bk, stm)) continue;
-                    const uint32_t raw = (static_cast<uint32_t>(wk) * 64u +
-                                          static_cast<uint32_t>(pc)) * 64u +
-                                         static_cast<uint32_t>(bk);
-                    if (raw != canonical_spatial(wk, pc, bk)) continue;  // non-minimal
-                    const uint32_t combined = raw * 2u + static_cast<uint32_t>(stm_bit);
-                    code_to_dense_[combined] = static_cast<int32_t>(dense_to_code_.size());
-                    dense_to_code_.push_back(combined);
-                }
-            }
+        for (uint64_t spatial = 0; spatial < spatial_space; ++spatial) {
+            // Unpack base-64 digits: sq[0] is most significant.
+            uint64_t t = spatial;
+            for (int i = men_ - 1; i >= 0; --i) { sq[i] = static_cast<int>(t % 64); t /= 64; }
+
+            if (!legal(extras_, sq, stm)) continue;
+            if (static_cast<uint32_t>(spatial) != canonical_spatial(sq)) continue;  // non-minimal
+
+            const uint32_t combined = static_cast<uint32_t>(spatial) * 2u +
+                                      static_cast<uint32_t>(stm_bit);
+            code_to_dense_[combined] = static_cast<int32_t>(dense_to_code_.size());
+            dense_to_code_.push_back(combined);
         }
     }
 }
 
-Position Index::decode(std::size_t index) const {
-    const uint32_t combined = dense_to_code_[index];
-    const int  stm_bit = static_cast<int>(combined & 1u);
-    uint32_t   spatial = combined >> 1;
-    const int  bk = static_cast<int>(spatial % 64); spatial /= 64;
-    const int  pc = static_cast<int>(spatial % 64); spatial /= 64;
-    const int  wk = static_cast<int>(spatial);
+Index::Index(PieceType white_piece) : Index(std::vector<Piece>{{Color::White, white_piece}}) {}
 
+void Index::raw_squares(std::size_t index, int* out) const {
+    uint32_t spatial = dense_to_code_[index] >> 1;
+    for (int i = men_ - 1; i >= 0; --i) { out[i] = static_cast<int>(spatial % 64); spatial /= 64; }
+}
+
+Color Index::side_to_move(std::size_t index) const {
+    return (dense_to_code_[index] & 1u) ? Color::Black : Color::White;
+}
+
+Position Index::make_position(const int* squares, Color stm) const {
     Position pos;
     pos.clear();
-    const Bitboard wk_bb = square_bb(static_cast<Square>(wk));
-    const Bitboard bk_bb = square_bb(static_cast<Square>(bk));
-    const Bitboard pc_bb = square_bb(static_cast<Square>(pc));
+    const Bitboard wk_bb = square_bb(static_cast<Square>(squares[0]));
+    const Bitboard bk_bb = square_bb(static_cast<Square>(squares[1]));
+    pos.by_type[type_index(PieceType::King)] |= wk_bb | bk_bb;
+    pos.by_color[color_index(Color::White)]  |= wk_bb;
+    pos.by_color[color_index(Color::Black)]  |= bk_bb;
 
-    pos.by_type[type_index(PieceType::King)]  |= wk_bb | bk_bb;
-    pos.by_type[type_index(white_piece_)]     |= pc_bb;
-    pos.by_color[color_index(Color::White)]   |= wk_bb | pc_bb;
-    pos.by_color[color_index(Color::Black)]   |= bk_bb;
-    pos.side_to_move = (stm_bit == 0) ? Color::White : Color::Black;
+    for (std::size_t e = 0; e < extras_.size(); ++e) {
+        const Bitboard b = square_bb(static_cast<Square>(squares[2 + e]));
+        pos.by_type[type_index(extras_[e].type)]   |= b;
+        pos.by_color[color_index(extras_[e].color)] |= b;
+    }
+    pos.side_to_move = stm;
     pos.zobrist = compute_zobrist(pos);
     return pos;
 }
 
-std::size_t Index::encode_raw(int wk, int pc, int bk, Color stm) const {
-    const uint32_t canonical = canonical_spatial(wk, pc, bk);
+Position Index::decode(std::size_t index) const {
+    int sq[4];
+    raw_squares(index, sq);
+    return make_position(sq, side_to_move(index));
+}
+
+std::size_t Index::encode_squares(const int* squares, Color stm) const {
+    const uint32_t canonical = canonical_spatial(squares);
     const uint32_t combined = canonical * 2u + (stm == Color::Black ? 1u : 0u);
     return static_cast<std::size_t>(code_to_dense_[combined]);
 }
 
 std::size_t Index::encode(const Position& pos) const {
-    const int wk = sq_index(lsb(pos.by_type[type_index(PieceType::King)] &
-                                pos.by_color[color_index(Color::White)]));
-    const int bk = sq_index(lsb(pos.by_type[type_index(PieceType::King)] &
-                                pos.by_color[color_index(Color::Black)]));
-    const int pc = sq_index(lsb(pos.by_type[type_index(white_piece_)] &
-                                pos.by_color[color_index(Color::White)]));
-    return encode_raw(wk, pc, bk, pos.side_to_move);
+    int sq[4];
+    sq[0] = sq_index(lsb(pos.by_type[type_index(PieceType::King)] & pos.by_color[color_index(Color::White)]));
+    sq[1] = sq_index(lsb(pos.by_type[type_index(PieceType::King)] & pos.by_color[color_index(Color::Black)]));
+    for (std::size_t e = 0; e < extras_.size(); ++e) {
+        sq[2 + e] = sq_index(lsb(pos.by_type[type_index(extras_[e].type)] &
+                                 pos.by_color[color_index(extras_[e].color)]));
+    }
+    return encode_squares(sq, pos.side_to_move);
 }
 
 }  // namespace tb

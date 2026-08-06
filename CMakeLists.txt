@@ -103,6 +103,8 @@ add_library(chess_engine STATIC
         src/slider.cpp
         src/movegen.cpp
         src/perft.cpp
+        src/eval.cpp
+        src/search.cpp
         src/tb_index.cpp
         src/tb_solve.cpp)
 target_link_libraries(chess_engine
