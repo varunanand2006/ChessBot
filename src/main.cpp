@@ -15,7 +15,6 @@
 #include <vector>
 
 #include "bitboard.hpp"
-#include "eval.hpp"
 #include "movegen.hpp"
 #include "perft.hpp"
 #include "position.hpp"
@@ -156,6 +155,47 @@ int run_tb(int argc, char** argv) {
             if (t.value[i] > 0 && tb::win_dtm(t.value[i]) == t.max_win_dtm) { deepest = i; break; }
         std::printf("deepest win (%d-ply mate): %s\n",
                     t.max_win_dtm, to_fen(idx.decode(deepest)).c_str());
+    }
+    return 0;
+}
+
+// Dump a sample of tablebase positions as CSV ("fen,category,signed_dtm") for
+// external verification. signed_dtm is plies to mate: +ve if the side to move
+// wins (delivers mate), -ve if it is being mated, 0 for a draw — the same
+// convention the Lichess/Gaviota API uses, so a verifier can compare directly.
+int run_tbdump(int argc, char** argv) {
+    std::vector<tb::Piece> extras;
+    std::string name;
+    if (argc < 3 || !parse_material(argv[2], extras, name)) {
+        std::fprintf(stderr, "usage: chess tbdump <material> [N]\n");
+        return 1;
+    }
+    const int n = (argc >= 4) ? std::atoi(argv[3]) : 32;
+
+    tb::Index idx(std::move(extras));
+    const tb::Table t = tb::solve_sweep(idx);
+    const std::size_t N = idx.size();
+    if (N == 0 || n <= 0) return 0;
+
+    // Sample indices spread across the table, plus the two hardest positions
+    // (deepest win / deepest loss) where bugs are most likely to hide.
+    std::vector<std::size_t> picks;
+    for (int k = 0; k < n; ++k) picks.push_back(static_cast<std::size_t>(k) * N / static_cast<std::size_t>(n));
+    std::size_t deepest_win = 0, deepest_loss = 0;
+    int best_win = -1, best_loss = -1;
+    for (std::size_t i = 0; i < N; ++i) {
+        const int16_t v = t.value[i];
+        if (v > 0 && tb::win_dtm(v)  > best_win)  { best_win  = tb::win_dtm(v);  deepest_win  = i; }
+        if (v < 0 && tb::loss_dtm(v) > best_loss) { best_loss = tb::loss_dtm(v); deepest_loss = i; }
+    }
+    if (best_win  >= 0) picks.push_back(deepest_win);
+    if (best_loss >= 0) picks.push_back(deepest_loss);
+
+    for (const std::size_t i : picks) {
+        const int16_t v = t.value[i];
+        const char* cat = (v > 0) ? "win" : (v < 0) ? "loss" : "draw";
+        const int signed_dtm = (v > 0) ? tb::win_dtm(v) : (v < 0) ? -tb::loss_dtm(v) : 0;
+        std::printf("%s,%s,%d\n", to_fen(idx.decode(i)).c_str(), cat, signed_dtm);
     }
     return 0;
 }
@@ -325,6 +365,7 @@ int main(int argc, char** argv) {
     if (argc >= 3 && std::strcmp(argv[1], "perft") == 0)  return run_perft(argc, argv, false);
     if (argc >= 3 && std::strcmp(argv[1], "divide") == 0) return run_perft(argc, argv, true);
     if (argc >= 2 && std::strcmp(argv[1], "tb") == 0)     return run_tb(argc, argv);
+    if (argc >= 2 && std::strcmp(argv[1], "tbdump") == 0) return run_tbdump(argc, argv);
     if (argc >= 3 && std::strcmp(argv[1], "search") == 0) return run_search(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "play") == 0)   return run_play(argc, argv);
 
@@ -333,6 +374,7 @@ int main(int argc, char** argv) {
     std::printf("  chess perft  <depth> [FEN...]\n");
     std::printf("  chess divide <depth> [FEN...]\n");
     std::printf("  chess tb     <material>   e.g. Q, R, KQK, KQKR, KRKN\n");
+    std::printf("  chess tbdump <material> [N]        sample positions as CSV (fen,cat,dtm)\n");
     std::printf("  chess search <depth> [FEN...]      best move for a position\n");
     std::printf("  chess play   [depth] [FEN...]      play vs the engine (you are White)\n");
     return 0;

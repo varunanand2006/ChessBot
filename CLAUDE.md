@@ -114,6 +114,12 @@ cmake --build build-debug
 # Tablebase probing: node-count reduction, heuristic vs TB-probing search
 ./build/benchmarks/tb_probe_bench.exe
 
+# Dump sample TB positions as CSV (fen,category,signed_dtm) for verification
+./build/chess.exe tbdump KQKR 25
+
+# Verify generated tables vs the Lichess tablebase API (needs network + curl)
+python python/verify_tablebase.py 25 KQK KRK KQKR
+
 # Regenerate the eval tables from the Python Texel constants (one-off)
 python python/gen_eval_tables.py > src/eval_tables.inc
 ```
@@ -235,9 +241,11 @@ Next candidate steps (pick per goal — GPU relevance vs. table coverage):
   per-pass DTM update, convergence reduction. Profile with Nsight Compute; target
   achieved memory bandwidth as the headline metric. (Needs 4/5-man tables to be
   worth a GPU — 3-man is too small.) `/cuda` does not exist yet.
-- **Phase 4:** Verify generated tables against Syzygy or Gaviota (Gaviota = DTM,
-  the matching metric) — NOT yet done. Tablebase probing IN THE SEARCH is done
-  (below); the remaining Phase 4 work is external DTM verification.
+- **Phase 4: DONE.** Tablebase probing in the search (below) + external DTM
+  verification: our tables match the Lichess tablebase API (Gaviota DTM source)
+  on 133/133 sampled positions across KQK/KRK/KBK/KQKR/KRKN — exact category and
+  signed distance-to-mate, including the deepest mates. See `chess tbdump` +
+  `python/verify_tablebase.py`.
 - **Phase 5 (stretch):** Use the tablebase as a perfect-play oracle to measure how
   often alpha-beta selects an optimal move at fixed node budgets. Also needs the
   search.
@@ -291,12 +299,21 @@ CLI `chess search` / `chess play`):
   the exposed king and eval hits a missing-king out-of-bounds. `position_legal`
   in `main.cpp`.
 
+### External DTM verification — DONE (2026-08-06)
+
+`chess tbdump <material> [N]` emits sample positions as CSV (fen, category,
+signed DTM in plies: + if side-to-move mates, − if being mated, 0 draw — the
+Lichess/Gaviota convention). `python/verify_tablebase.py` runs the dump, queries
+the Lichess tablebase API (Gaviota DTM for ≤7 men) per FEN via curl, and compares
+category + signed DTM. Result: **133/133 match** across KQK, KRK, KBK, KQKR,
+KRKN (incl. deepest mates). Manual/network — NOT in the offline ctest suite. The
+script shells out to curl because Python's SSL trust store is misconfigured in
+this environment.
+
 ### Not-yet-built engine work
 
 - **UCI protocol** — so the engine can run in any chess GUI / play on Lichess.
   Not started; `chess play` is a simple built-in text driver for now.
-- **External DTM verification** (rest of Phase 4) — spot-check generated tables
-  against Gaviota / the Lichess tablebase API.
 - **Search optimizations** (if NPS becomes a focus): fixed-size TT, staged move
   generation, killer/history heuristics, aspiration windows. A latent item:
   quiescence stand-pats even when in check (faithful to the Python original) —
