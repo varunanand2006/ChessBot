@@ -78,7 +78,14 @@ constexpr uint64_t rank_combination(const int* elems, int k) {
 constexpr void unrank_combination(uint64_t r, int k, int* out) {
     for (int i = k - 1; i >= 0; --i) {
         int c = i;
-        while (binom(c + 1, i + 1) <= r) ++c;  // grow to the largest fitting c
+        // Grow to the largest fitting element. The `c + 1 < kMaxN` bound is a
+        // hard safety cap: elements of a subset over a <=64-square universe are
+        // always < kMaxN, so it never affects a valid unrank, but it guarantees
+        // termination if `r` is ever out of range for `k`. Without it, binom()
+        // returns 0 past n=kMaxN, so `0 <= r` would spin forever — on the GPU
+        // that hangs the whole kernel (no watchdog to lean on), so the primitive
+        // must be self-limiting rather than trusting every caller's arithmetic.
+        while (c + 1 < kMaxN && binom(c + 1, i + 1) <= r) ++c;
         out[i] = c;
         r -= binom(c, i + 1);
     }
