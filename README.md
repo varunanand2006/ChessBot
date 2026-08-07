@@ -104,10 +104,11 @@ optimization log: **[`cuda/PROFILING.md`](cuda/PROFILING.md)**.
 | 4 · Profile + optimize | nsys breakdown + 3 measured optimizations | host-gated after each ✅ | **17.2× kernel speedup** (below) ✅ |
 | 5 · Scale | solve a real 5-man to completion | — | future work |
 
-#### Results — solving KQKR (all 3,494,568 positions, to mate-in-35)
+#### Results — solving KQKR (KQ vs KR, a **4-piece** endgame; all 3,494,568 positions, to mate-in-35)
 
-Optimization ladder on the RTX 4090, 65 Jacobi passes, each step re-gated
-bit-exact vs the CPU oracle:
+One CUDA thread per position — **~3.5M threads across ~27,300 blocks**, re-launched
+each of the **65 Jacobi passes** to convergence (~227M thread-executions total).
+Optimization ladder on the RTX 4090, each step re-gated bit-exact vs the CPU oracle:
 
 | Kernel | Time | Mpos/s | vs naive |
 |---|---:|---:|---:|
