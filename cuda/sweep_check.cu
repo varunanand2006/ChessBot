@@ -103,6 +103,15 @@ int main(int argc, char** argv) {
     CUDA_CHECK(cudaGetDeviceCount(&count));
     if (count == 0) { std::fprintf(stderr, "No CUDA device.\n"); return 2; }
 
+    // Build the host magic slider tables up front. build_sweep_setup() below runs
+    // the host legality/classification pass, which calls slider::rook_attacks on
+    // the CPU to test king safety; those tables are lazily built by slider::init()
+    // (idempotent). upload_sliders() also calls init(), but only AFTER
+    // build_sweep_setup — so without this the first host rook_attacks dereferences
+    // an unbuilt table and segfaults. Every other CPU-side tool inits at startup;
+    // this harness must too.
+    slider::init();
+
     // Material: KQKR by default; `KRK`/`KQK` for a quick smoke run.
     const std::string which = (argc > 1) ? argv[1] : "KQKR";
     using PT = PieceType;
