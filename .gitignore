@@ -1,14 +1,27 @@
-# Generated training data — large files, regenerate locally
-*.csv
-*.pt
+# --- C++ build ---
+build/
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+*.o
+*.obj
+*.exe
+*.a
 
-# Python
+# --- Editors / IDEs ---
+.idea/
+.vs/
+.vscode/
+.venv/
+
+# --- Python ---
 __pycache__/
 *.pyc
 *.pyo
 
-# PyCharm
-.idea/
+# --- Generated training data (large; regenerate locally) ---
+*.csv
+*.pt
 
-# Downloaded assets
+# --- Downloaded assets ---
 pieces/
