@@ -136,8 +136,14 @@ int main(int argc, char** argv) {
     frees.push_back(d_state); frees.push_back(d_a); frees.push_back(d_b); frees.push_back(d_changed);
 
     // --- Iterate to a fixpoint ---------------------------------------------
+    // Block size 128 is a STARTING default, not a tuned value: sweep_update is
+    // register-heavy (a full Position + MoveLists live per thread), so a smaller
+    // block often gives better occupancy than the usual 256 when registers, not
+    // block count, are the limiter. The right value is whatever Nsight's
+    // occupancy analysis says on the actual card (Phase 4) — profile.sh reports
+    // registers/thread and achieved occupancy to drive that choice.
     const int block = 128;
-    const uint64_t grid = (N + block - 1) / block;
+    const uint64_t grid = (N + block - 1) / block;  // <= ~1.6M for 5-man; fits grid.x
     int16_t* v_old = d_a;
     int16_t* v_new = d_b;
     int passes = 0;
@@ -153,17 +159,43 @@ int main(int argc, char** argv) {
         int16_t* tmp = v_old; v_old = v_new; v_new = tmp;  // swap
         ++passes;
         if (!changed) break;
-        if (passes > tb::MATE) { std::fprintf(stderr, "did not converge\n"); return 2; }
+        if (passes > tb::MATE) {  // safety net; a correct sweep converges long before
+            std::fprintf(stderr, "did not converge\n");
+            for (void* p : frees) cudaFree(p);
+            return 2;
+        }
     }
     cudaEventRecord(t1); cudaEventSynchronize(t1);
     float ms = 0; cudaEventElapsedTime(&ms, t0, t1);
+    cudaEventDestroy(t0); cudaEventDestroy(t1);
 
     // v_old now holds the converged table.
     std::vector<int16_t> got(N);
     CUDA_CHECK(cudaMemcpy(got.data(), v_old, N * sizeof(int16_t), cudaMemcpyDeviceToHost));
 
-    std::printf("Converged in %d passes, %.1f ms (%.1f Mpos/s over passes)\n",
-                passes, ms, (double)N * passes / (ms * 1e3));
+    // --- Headline metrics ---------------------------------------------------
+    // The sweep is bandwidth-bound, so the number that matters is achieved DRAM
+    // bandwidth. ncu (dram__bytes.sum) gives the true figure counting every
+    // table/movegen load; here we report a LOWER BOUND from the value-buffer
+    // traffic alone — each pass streams v_old (read, 2 B/pos), state (read,
+    // 1 B/pos) and v_new (write, 2 B/pos) = 5 B/pos — plus positions/sec and
+    // per-pass time. The true achieved bandwidth is higher (child/table reads);
+    // profile.sh + Nsight report it exactly.
+    const double value_bytes = 5.0 * (double)N * (double)passes;
+    const double gb_per_s    = value_bytes / (ms * 1e6);  // (bytes)/(ms*1e-3)/1e9
+
+    int dev = 0; cudaGetDevice(&dev);
+    cudaDeviceProp prop{}; cudaGetDeviceProperties(&prop, dev);
+    const double peak_gb_s =
+        2.0 * (prop.memoryBusWidth / 8.0) * (prop.memoryClockRate * 1e3) / 1e9;
+
+    std::printf("Converged in %d passes, %.1f ms  (%.2f ms/pass)\n",
+                passes, ms, ms / passes);
+    std::printf("  throughput: %.1f Mpos/s (over all passes)\n",
+                (double)N * passes / (ms * 1e3));
+    std::printf("  value-buffer bandwidth: %.0f GB/s  (lower bound; %.1f%% of %.0f GB/s peak)\n",
+                gb_per_s, peak_gb_s > 0 ? 100.0 * gb_per_s / peak_gb_s : 0.0, peak_gb_s);
+    std::printf("  (run cuda/profile.sh for the true achieved DRAM bandwidth via Nsight)\n");
 
     // --- Gate: bit-exact vs solve_sweep_comb -------------------------------
     tb::Table oracle = tb::solve_sweep_comb(idx);

@@ -134,11 +134,28 @@ global convergence flag; ping-pong `int16[N]` value buffers.
   smoke run. Prints passes + wall time. ctest `cuda_sweep_check KRK` (fast); KQKR
   run explicitly on the box. This is the headline kernel Phase 4 profiles.
 
-**Phase 4 — Profile + optimize** *(the portfolio meat)*
+**Phase 4 — Profile + optimize** *(the portfolio meat)* — **RIG READY (local); measurement is GPU-only**
 Nsight Compute → achieved bandwidth / occupancy / divergence. Then, measuring
 each: `int empty[64]` → `uint64_t` bitmask + popcount; live-node work-list to cut
 warp divergence; coalesced buffer layout.
 **Gate:** documented bandwidth + speedup vs the CPU baseline.
+
+- **What was prepped locally (Phase 4 has no host-verifiable half — it's
+  measurement):** `cuda/sweep_check.cu` now reports the headline metric itself
+  (value-buffer bandwidth as a lower bound + % of the card's theoretical peak,
+  positions/sec, ms/pass). `cuda/profile.sh` runs the harness self-report +
+  targeted `ncu` metrics (dram %, occupancy, warp efficiency, regs/thread) + a
+  full `ncu --set full` report. `cuda/PROFILING.md` is the decision loop: read
+  Nsight → pick the matching candidate → apply → re-gate (bit-exact) → re-measure.
+- **Candidate order (static analysis, confirm with Nsight):** (1) fuse the
+  legality filter into the sweep to drop the redundant 2nd MoveList (~1 KB/thread
+  is the biggest footprint — bigger than empty[64]); (2) `int empty[64]` →
+  bitmask+popcount; (3) small tables → `__constant__`, large magic tables →
+  global `__restrict__`/`__ldg`; (4) live-node work-list for divergence; (5) L2
+  for the irreducible child-read gather. Each is host-oracle-gateable via the
+  existing `test_*_device` gates before it ever runs on the GPU.
+- **Gate:** GPU KQKR wall time + achieved DRAM bandwidth (% peak) vs the CPU
+  baseline (~10.5 min single-thread memoryless). Absolute numbers only.
 
 **Phase 5 — Scale**
 Solve a real 5-man to completion; report positions/sec + bandwidth vs the

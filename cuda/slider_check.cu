@@ -104,6 +104,9 @@ int main() {
         }
     }
 
+    cudaFree(d_rook_m); cudaFree(d_bishop_m); cudaFree(d_rook_t); cudaFree(d_bishop_t);
+    cudaFree(d_r); cudaFree(d_b); cudaFree(d_q);
+
     if (bad == 0) {
         std::printf("PASS: device sliders == host on %llu (square,occ) cases.\n",
                     (unsigned long long)N);
