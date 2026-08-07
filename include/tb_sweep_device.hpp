@@ -110,37 +110,50 @@ CH_HD inline int16_t sweep_update(uint64_t i, const int16_t* __restrict__ v_old,
     comb_decode(i, sq, &bit, kt, mat);
     Position pos = sweep_make_position(sq, bit ? Color::Black : Color::White, mat);
 
-    MoveList ml;
-    movegen_dev::generate_legal(pos, ml, S);
+    // FUSED legality filter + child evaluation (Phase 4 optimization #1).
+    // Generate PSEUDO-legal moves, then in a SINGLE make/unmake per move test
+    // king safety and — only if legal — read the child value. The earlier form
+    // filtered legality inside generate_legal (one make/unmake per pseudo move to
+    // test check) and then re-made every legal move here for the child lookup (a
+    // SECOND make/unmake). In this compute-bound kernel that per-move make/unmake
+    // is the dominant cost, so paying it once instead of twice per legal move is
+    // the biggest single win; it also drops one MoveList (~512 B/thread of stack,
+    // the prime occupancy limiter). Measured on-box, not assumed.
+    MoveList pseudo;
+    movegen_dev::generate_pseudo_legal(pos, pseudo, S);
+    const Color us   = pos.side_to_move;
+    const Color them = ~us;
 
     int best = -(MATE + 1);
-    for (int k = 0; k < ml.size(); ++k) {
-        const Move m = ml[k];
+    for (int k = 0; k < pseudo.size(); ++k) {
+        const Move m = pseudo[k];
         StateInfo st;
         movegen_dev::make_move(pos, m, st);
 
-        // Which group's piece did this move capture (its bitboard went empty)?
-        int captured = -1;
-        for (int g = 0; g < mat.num_groups; ++g) {
-            const DeviceGroup& G = mat.groups[g];
-            if ((pos.by_type[G.type] & pos.by_color[G.color]) == 0) { captured = g; break; }
-        }
+        if (!movegen_dev::is_attacked(pos, movegen_dev::king_square(pos, us), them, S)) {
+            // Legal move. Which group's piece did it capture (bitboard emptied)?
+            int captured = -1;
+            for (int g = 0; g < mat.num_groups; ++g) {
+                const DeviceGroup& G = mat.groups[g];
+                if ((pos.by_type[G.type] & pos.by_color[G.color]) == 0) { captured = g; break; }
+            }
 
-        int child;
-        if (captured < 0) {
-            child = v_old[sweep_encode_position(pos, kt, mat)];
-        } else {
-            const DeviceSub& s = subs[captured];
-            // Hoist to a restrict local so the sub-table probe (also a scattered
-            // gather) gets the same read-only-cache treatment as the v_old gather.
-            const int16_t* __restrict__ sv = s.value;
-            child = s.draw ? 0 : sv[sweep_encode_position(pos, kt, s.mat)];
+            int child;
+            if (captured < 0) {
+                child = v_old[sweep_encode_position(pos, kt, mat)];
+            } else {
+                const DeviceSub& s = subs[captured];
+                // Hoist to a restrict local so the sub-table probe (also a
+                // scattered gather) gets the read-only-cache (LDG) treatment.
+                const int16_t* __restrict__ sv = s.value;
+                child = s.draw ? 0 : sv[sweep_encode_position(pos, kt, s.mat)];
+            }
+
+            const int cand = sweep_age(-child);
+            if (cand > best) best = cand;
         }
 
         movegen_dev::unmake_move(pos, m, st);
-
-        const int cand = sweep_age(-child);
-        if (cand > best) best = cand;
     }
     return static_cast<int16_t>(best);
 }
