@@ -87,26 +87,50 @@ indexer tests, eval-table regeneration) lives in `CLAUDE.md`.
 - **Externally verified:** 133/133 sampled positions match the Lichess (Gaviota
   DTM) API on category and signed distance-to-mate across KQK/KRK/KBK/KQKR/KRKN.
 
-### CUDA port — Phases 0–3 host-gated bit-exact; Phase 4 (profiling) is GPU-only
+### CUDA port — Phases 0–4 validated on a real GPU (RTX 4090), bit-exact ✅
 
 The whole port is written so the *device-shaped* code compiles and runs **on the
 host** (a `CH_HD` = `__host__ __device__` macro, empty off-nvcc), letting each
-phase be gated bit-exact against the CPU oracle *with no GPU*. What remains is
-running it on real hardware and profiling. Full detail: **[`cuda/ROADMAP.md`](cuda/ROADMAP.md)**,
-optimization plan: **[`cuda/PROFILING.md`](cuda/PROFILING.md)**.
+phase be gated bit-exact against the CPU oracle *with no GPU* — then confirmed on
+real hardware. Full detail: **[`cuda/ROADMAP.md`](cuda/ROADMAP.md)**, results +
+optimization log: **[`cuda/PROFILING.md`](cuda/PROFILING.md)**.
 
-| Phase | What | Local gate (no GPU) | On-box |
+| Phase | What | Local gate (no GPU) | On-box (RTX 4090) |
 |---|---|---|---|
-| 0 · Scaffold | `CH_HD` macro, guarded CMake, hello + equality harness | CPU build unchanged | build+run gate pending |
-| 1 · Index primitives | binom / rank-unrank / D4 / king table / `CombIndex` on device | host mirror == `CombIndex`, all 3.49M KQKR + 1.75M KRRK ✅ | `cuda_index_check`, `cuda_comb_index_check` |
-| 2 · Movegen + make/unmake | magic sliders + legal movegen device-side | host == reference over 980,664 perft nodes ✅ | `cuda_slider_check`, `cuda_movegen_check` |
-| 3 · Sweep kernel | one thread/position, Jacobi ping-pong to fixpoint | host sweep == `solve_sweep_comb` (KRK/KQK) ✅; KQKR manual | `cuda_sweep_check KQKR` (all 2,467,122, mate-in-35) |
-| 4 · Profile + optimize | Nsight → bandwidth/occupancy/divergence, then apply candidates | rig ready (self-report + `profile.sh`) | **the portfolio meat** |
-| 5 · Scale | solve a real 5-man to completion | — | positions·s⁻¹ + bandwidth |
+| 0 · Scaffold | `CH_HD` macro, guarded CMake, hello + equality harness | CPU build unchanged | host==device, 1,008 GB/s peak ✅ |
+| 1 · Index primitives | binom / rank-unrank / D4 / king table / `CombIndex` on device | host mirror == `CombIndex`, 3.49M KQKR + 1.75M KRRK ✅ | `cuda_index_check` + `cuda_comb_index_check` ✅ |
+| 2 · Movegen + make/unmake | magic sliders + legal movegen device-side | host == reference over 980,664 perft nodes ✅ | sliders 524,288 cases + movegen ✅ |
+| 3 · Sweep kernel | one thread/position, Jacobi ping-pong to fixpoint | host sweep == `solve_sweep_comb` (KRK/KQK) ✅ | **KQKR all 3,494,568, mate-in-35, bit-exact** ✅ |
+| 4 · Profile + optimize | nsys breakdown + 3 measured optimizations | host-gated after each ✅ | **17.2× kernel speedup** (below) ✅ |
+| 5 · Scale | solve a real 5-man to completion | — | future work |
 
-**Headline metric = achieved DRAM bandwidth** (it's a bandwidth-bound dense
-sweep), measured with Nsight Compute against the CPU baseline (KQKR ~10.5 min
-single-thread memoryless). Reported as absolute GB·s⁻¹ / ms / Mpos·s⁻¹.
+#### Results — solving KQKR (all 3,494,568 positions, to mate-in-35)
+
+Optimization ladder on the RTX 4090, 65 Jacobi passes, each step re-gated
+bit-exact vs the CPU oracle:
+
+| Kernel | Time | Mpos/s | vs naive |
+|---|---:|---:|---:|
+| naive port | 9,872 ms | 23.0 | 1.0× |
+| + fuse legality filter | 9,416 ms | 24.1 | 1.05× |
+| + O(1) small-k binom | 3,057 ms | 74.3 | 3.23× |
+| **+ free-square bitmask** | **575 ms** | **394.8** | **17.2×** |
+
+- **≈1,096× faster** than the same memoryless sweep on CPU (~630 s single-thread);
+  even **~9.4×** faster than the CPU's memory-hungry *materialized* solver (~5.4 s)
+  while using near-zero memory. The biggest single win (5.3×) was replacing a
+  256-byte `int empty[64]` stack array with a `uint64_t` bitmask — an occupancy
+  effect the static analysis had ranked *minor*; only measurement caught it.
+- **nsys** (which needs no HW counters): the `k_sweep_pass` kernel is **100% of GPU
+  time**; launch/copy/sync overhead is 0.5%. The kernel is **compute-bound on the
+  per-position movegen** — achieved value-buffer bandwidth ≈ 2 GB/s of the 1,008
+  GB/s peak, i.e. large bandwidth headroom for a future frontier-work-list redesign.
+- **Caveat:** the true DRAM-bandwidth % (the metric this phase originally targeted)
+  needs Nsight **Compute** counters, which RunPod locks in its non-privileged
+  containers (`ERR_NVGPUCTRPERM`); it needs a counter-enabled host to capture.
+- The first real `nvcc` build surfaced **5 device-portability bugs invisible to
+  every host gate** (4× host-table ODR-uses + a slider-init segfault) — the payoff
+  of building on the actual GPU.
 
 ## Repo layout
 

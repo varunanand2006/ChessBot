@@ -105,7 +105,7 @@ This is the largest, most divergent piece.
   `__constant__`; `int empty[64]`→bitmask; block size / register pressure of the
   make→king-safety→unmake filter (the flagged divergence risk) — all Nsight-driven.
 
-**Phase 3 — The sweep kernel** — **DONE local (3-man); KQKR host-validating; device on the box**
+**Phase 3 — The sweep kernel** — **DONE — validated on RTX 4090: KQKR all 3,494,568 positions bit-exact vs `solve_sweep_comb`, mate-in-35**
 Classify kernel (pass 0) + update kernel (one pass) + host driver loop with a
 global convergence flag; ping-pong `int16[N]` value buffers.
 **Gate:** final device table is **bit-exact** to `solve_sweep_comb` — KQKR, all
@@ -134,11 +134,16 @@ global convergence flag; ping-pong `int16[N]` value buffers.
   smoke run. Prints passes + wall time. ctest `cuda_sweep_check KRK` (fast); KQKR
   run explicitly on the box. This is the headline kernel Phase 4 profiles.
 
-**Phase 4 — Profile + optimize** *(the portfolio meat)* — **RIG READY (local); measurement is GPU-only**
-Nsight Compute → achieved bandwidth / occupancy / divergence. Then, measuring
-each: `int empty[64]` → `uint64_t` bitmask + popcount; live-node work-list to cut
-warp divergence; coalesced buffer layout.
-**Gate:** documented bandwidth + speedup vs the CPU baseline.
+**Phase 4 — Profile + optimize** *(the portfolio meat)* — **DONE on RTX 4090: 17.2× kernel speedup, KQKR 9,872 → 575 ms, all steps bit-exact. Full numbers in `PROFILING.md`.**
+Applied + measured (each re-gated bit-exact): (1) fuse legality filter → 1.05×;
+(3) O(1) small-k device binom → 3.23× cumulative; (2) `int empty[64]` → `uint64_t`
+bitmask → **17.2× cumulative** (5.3× from this alone — the biggest lever, opposite
+of the static-analysis priority order). **≈1,096× vs the CPU memoryless baseline
+(~630 s).** nsys: kernel is 100% of GPU time, still compute-bound on movegen (value
+BW ~2 GB/s of 1,008 peak). The true `dram__throughput` % was NOT captured —
+RunPod locks `ncu` counters (`ERR_NVGPUCTRPERM`); needs a counter-enabled host.
+Remaining lever: a frontier work-list (skip settled nodes; every pass currently
+recomputes all live nodes). `int empty[64]`→bitmask DONE; work-list is future.
 
 - **What was prepped locally (Phase 4 has no host-verifiable half — it's
   measurement):** `cuda/sweep_check.cu` now reports the headline metric itself

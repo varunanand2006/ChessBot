@@ -7,6 +7,50 @@ confirms it's the bottleneck, then re-measured. The kernel stays bit-exact vs
 `solve_sweep_comb` after every change (`cuda_sweep_check` is the gate that rides
 along).
 
+## Results — measured on an RTX 4090 (sm_89, CUDA 12.8), 2026-08-07
+
+Solving **KQKR** (all 3,494,568 comb positions, to mate-in-35), 65 Jacobi passes,
+each optimization re-gated bit-exact vs `solve_sweep_comb`:
+
+| Kernel (cumulative) | Time | ms/pass | Mpos/s | vs naive |
+|---|---:|---:|---:|---:|
+| naive port | 9,872 ms | 151.9 | 23.0 | 1.0× |
+| + fuse legality filter into the sweep (#1) | 9,416 ms | 144.9 | 24.1 | 1.05× |
+| + O(1) small-k device binom (#3, arithmetic) | 3,057 ms | 47.0 | 74.3 | 3.23× |
+| + free-square bitmask, no `empty[64]` (#2) | **575 ms** | **8.85** | **394.8** | **17.2×** |
+
+- vs CPU: **≈1,096×** faster than the same memoryless sweep on CPU (~630 s single-
+  thread), and **~9.4×** faster than the CPU's materialized solver (~5.4 s) at
+  near-zero memory. (CPU is single-thread on a different host — impl-to-impl, not
+  same-silicon.) KRK end-to-end: 53.9 → 7.1 ms.
+- **Surprise:** candidate #1 (the "biggest occupancy win" by static analysis) gave
+  only 1.05×; candidate #2 (`empty[64]`→bitmask, ranked *minor*) gave **5.3×**. The
+  256 B/thread stack array's occupancy cost + the O(ne) coord scans dominated.
+  Measurement beat the priority order — as intended.
+
+### nsys breakdown (no HW counters needed — this part works on RunPod)
+
+- `k_sweep_pass` = **100% of GPU time** (577.9 ms / 65 launches, 8.89 ms/pass,
+  ±2%). `cudaLaunchKernel` 2.7 ms total, `cudaMemset` 0.11 ms, GPU memcpy 1.8 ms —
+  **per-pass host/launch/copy/sync overhead is ~0.5%.** So "check convergence every
+  K passes" would save ~nothing; the kernel *is* the cost.
+- Uniform 8.89 ms/pass even late in convergence ⇒ every pass recomputes all
+  `SW_SOLVE` nodes regardless of whether they've settled. The remaining
+  algorithmic lever is a **frontier work-list** (re-process only nodes whose
+  predecessors changed) — a redesign, not a tweak.
+- Still **compute-bound on movegen**: achieved value-buffer bandwidth ≈ 2 GB/s of
+  the 1,008 GB/s peak (0.2%). Big bandwidth headroom remains.
+
+### The one metric we could NOT capture
+
+The true `dram__throughput` % — the headline this phase targeted — needs Nsight
+**Compute** counters. RunPod runs pods as non-privileged containers, so `ncu`
+returns **`ERR_NVGPUCTRPERM`** (counter access needs host-level CAP_SYS_ADMIN /
+the `NVreg_RestrictProfilingToAdminUsers=0` driver flag, unfixable from inside).
+nsys tracing works; the counter-based per-warp/occupancy/bandwidth numbers need a
+counter-enabled host (bare-metal or a provider that grants it). Everything below
+is still the plan for that run.
+
 ## The headline metric
 
 The sweep is a **bandwidth-bound dense sweep**, so the number is **achieved DRAM

@@ -276,17 +276,41 @@ CUDA-portable by design (the device kernels will reuse this exact arithmetic).
   on the GPU in Phase 3** (its stated purpose), not ground out on CPU here. The
   index + solver path is validated and ready to feed the GPU port.
 
+### CUDA Phase 3 + 4 — DONE, validated on a real RTX 4090 (2026-08-07)
+
+The GPU retrograde sweep is built, correct, and optimized on real hardware.
+Full numbers: `cuda/PROFILING.md`; status matrix: `cuda/ROADMAP.md`.
+
+- **Correctness:** `cuda_sweep_check KQKR` is **bit-exact vs `solve_sweep_comb` on
+  all 3,494,568 comb positions, mate-in-35.** Every device stage independently
+  gated (index, sliders, movegen, comb-index incl. KRRK duplicates).
+- **Performance:** KQKR solved in **575 ms** (RTX 4090, sm_89), a **17.2× kernel
+  speedup** over the naive port (9,872 ms) and **≈1,096× vs the CPU memoryless
+  baseline (~630 s)**. Optimizations, each re-gated bit-exact: fuse legality filter
+  (1.05×), O(1) small-k device binom (→3.23×), `int empty[64]`→`uint64_t` bitmask
+  (→17.2×; the 5.3× surprise — occupancy, opposite of the static-analysis order).
+- **Profiling:** nsys shows the kernel is 100% of GPU time (overhead ~0.5%) and
+  still **compute-bound on movegen** (value BW ~2 GB/s of 1,008 peak). The true
+  `dram__throughput` % was NOT captured — RunPod's non-privileged containers lock
+  Nsight Compute counters (`ERR_NVGPUCTRPERM`); needs a counter-enabled host.
+- **On-box bugs fixed** (invisible to host gates, only real nvcc found them):
+  4× `CH_HD` functions ODR-using host tables (D4, binom, attack tables,
+  CASTLE_MASK) + a slider-init-ordering segfault in `sweep_check.cu`. All on master.
+
 ### >>> PICK UP HERE <<<
 
-The 5-man index + memoryless-sweep path is DONE and validated; the full 5-man
-solve is intentionally deferred to the GPU. Next candidate steps:
-- **GPU (Phase 3) — the main line.** Port `solve_sweep_comb`'s per-pass update to
-  a CUDA kernel over the CombIndex space: device-side decode/movegen/encode,
-  per-pass DTM update, convergence reduction. The combinatorial arithmetic
-  (`combinatorial.hpp`), the king table, and the sweep shape were all built to
-  port verbatim. Needs a rented NVIDIA GPU + root for Nsight (~$10 RunPod/Vast
-  burst; compile locally, short run to profile). Headline metric = achieved
-  memory bandwidth. This is the portfolio spine.
+Phase 3+4 are done on the GPU. Remaining candidate steps:
+- **Phase 5 — scale to a real 5-man** (KQRKR etc.) on the GPU: needs count-based
+  capture detection for duplicate-piece groups in the solver, a host-RAM check
+  (int16 table ~210–420 MB; scale the movegen_check sampling stride), then verify
+  one 5-man vs the Lichess API.
+- **Frontier work-list** (the next real GPU optimization): every pass currently
+  recomputes ALL live `SW_SOLVE` nodes even after they settle (uniform 8.89 ms/pass
+  to the end). Re-process only nodes whose predecessors changed last pass — a
+  retrograde frontier BFS (like the CPU `solve_bfs`), a redesign not a tweak.
+- **True DRAM bandwidth:** re-run `cuda/profile.sh` on a counter-enabled host
+  (bare-metal / a provider that grants GPU perf counters) to capture the
+  `dram__throughput` % the RunPod pod couldn't.
 - **(Optional, if a CPU 5-man table is wanted before the GPU)** parallelize the
   sweep (double-buffered Jacobi across cores) — a real CPU baseline artifact —
   then verify one 5-man vs the Lichess API. Also needs: skip the unused
@@ -301,10 +325,11 @@ solve is intentionally deferred to the GPU. Next candidate steps:
 
 ## Later phases (context — not started)
 
-- **Phase 3:** CUDA retrograde sweep kernels. Device-side move/unmove generation,
-  per-pass DTM update, convergence reduction. Profile with Nsight Compute; target
-  achieved memory bandwidth as the headline metric. (Needs 4/5-man tables to be
-  worth a GPU — 3-man is too small.) `/cuda` does not exist yet.
+- **Phase 3+4: DONE on a real RTX 4090** (see the CUDA status section above).
+  Device-side movegen + per-pass DTM sweep + convergence reduction, bit-exact on
+  KQKR (mate-in-35), 17.2× kernel speedup, ≈1,096× vs the CPU baseline. `/cuda`
+  exists with the kernels + gates. Profiled with nsys (compute-bound); the true
+  Nsight-Compute DRAM-bandwidth % awaits a counter-enabled host.
 - **Phase 4: DONE.** Tablebase probing in the search (below) + external DTM
   verification: our tables match the Lichess tablebase API (Gaviota DTM source)
   on 133/133 sampled positions across KQK/KRK/KBK/KQKR/KRKN — exact category and
