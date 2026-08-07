@@ -49,6 +49,12 @@ struct DeviceGroup {
                                     // encode/decode; kept for parity/debug)
     uint64_t radix;                 // C(R, count)
     int      slots[kDevMaxGroup];   // extras indices in this group (ascending)
+    int      color;                 // Color of this group's pieces (0/1)
+    int      type;                  // PieceType of this group's pieces (0..5)
+                                    // color/type are unused by encode/decode; the
+                                    // retrograde sweep uses them to rebuild a
+                                    // Position and detect which piece a capture
+                                    // removed (see tb_sweep_device.hpp).
 };
 
 // A full material's descriptor: men count + the ordered groups.

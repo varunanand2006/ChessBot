@@ -48,3 +48,41 @@ set_target_properties(cuda_comb_index_check PROPERTIES
         CUDA_STANDARD 20
         CUDA_STANDARD_REQUIRED ON)
 add_test(NAME cuda_comb_index_check COMMAND cuda_comb_index_check)
+
+# --- Phase 2a: device magic sliders vs host slider.cpp ---------------------
+# Uploads the host-built magic tables and runs the multiply-shift attack query
+# on the device, diffing rook/bishop/queen vs slider.cpp over random
+# occupancies per square. Links chess_engine for the host slider + reference.
+add_executable(cuda_slider_check slider_check.cu)
+target_include_directories(cuda_slider_check PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(cuda_slider_check PRIVATE chess_engine)
+set_target_properties(cuda_slider_check PROPERTIES
+        CUDA_STANDARD 20
+        CUDA_STANDARD_REQUIRED ON)
+add_test(NAME cuda_slider_check COMMAND cuda_slider_check)
+
+# --- Phase 2: device generate_legal vs host movegen over TB positions -------
+# Runs movegen_dev::generate_legal on the device over CombIndex-decoded
+# positions and diffs an order-independent move-set signature vs the host
+# movegen::generate_legal. The stated Phase 2 gate (device legal sets == host).
+add_executable(cuda_movegen_check movegen_check.cu)
+target_include_directories(cuda_movegen_check PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(cuda_movegen_check PRIVATE chess_engine)
+set_target_properties(cuda_movegen_check PROPERTIES
+        CUDA_STANDARD 20
+        CUDA_STANDARD_REQUIRED ON)
+add_test(NAME cuda_movegen_check COMMAND cuda_movegen_check)
+
+# --- Phase 3: the retrograde sweep kernel + bit-exact gate ------------------
+# THE portfolio kernel. Runs solve_sweep_comb's per-node update as a CUDA kernel
+# (one thread/position, Jacobi ping-pong to a fixpoint) and diffs the final table
+# bit-exact vs solve_sweep_comb. Default material KQKR (all 2,467,122 positions,
+# mate-in-35); pass KRK/KQK for a quick smoke run. Nsight-profiled in Phase 4.
+add_executable(cuda_sweep_check sweep_check.cu)
+target_include_directories(cuda_sweep_check PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(cuda_sweep_check PRIVATE chess_engine)
+set_target_properties(cuda_sweep_check PROPERTIES
+        CUDA_STANDARD 20
+        CUDA_STANDARD_REQUIRED ON)
+# KRK is the fast default for ctest; KQKR is run explicitly on the box.
+add_test(NAME cuda_sweep_check COMMAND cuda_sweep_check KRK)

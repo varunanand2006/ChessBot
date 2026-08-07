@@ -107,8 +107,8 @@ inline constexpr std::array<std::array<Bitboard, 64>, 2> PAWN = detail::make_paw
 
 // Query accessors. Constexpr + Square-typed so callers stay readable and the
 // index math is centralized here.
-constexpr Bitboard knight(Square s) { return KNIGHT[sq_index(s)]; }
-constexpr Bitboard king(Square s)   { return KING[sq_index(s)]; }
-constexpr Bitboard pawn(Color c, Square s) { return PAWN[color_index(c)][sq_index(s)]; }
+CH_HD constexpr Bitboard knight(Square s) { return KNIGHT[sq_index(s)]; }
+CH_HD constexpr Bitboard king(Square s)   { return KING[sq_index(s)]; }
+CH_HD constexpr Bitboard pawn(Color c, Square s) { return PAWN[color_index(c)][sq_index(s)]; }
 
 }  // namespace attacks

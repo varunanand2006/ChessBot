@@ -201,6 +201,8 @@ void CombIndex::fill_device(DeviceKingTable& kt, DeviceMaterial& mat) const {
         mat.groups[gi].count = g.count;
         mat.groups[gi].R     = g.R;
         mat.groups[gi].radix = g.radix;
+        mat.groups[gi].color = color_index(g.color);
+        mat.groups[gi].type  = type_index(g.type);
         for (int j = 0; j < g.count; ++j) mat.groups[gi].slots[j] = g.slots[j];
     }
 }

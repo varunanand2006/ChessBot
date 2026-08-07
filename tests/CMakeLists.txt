@@ -77,6 +77,26 @@ add_test(NAME tb_comb_index COMMAND test_tb_comb_index)
 add_test(NAME tb_comb_index_slow COMMAND test_tb_comb_index slow)
 set_tests_properties(tb_comb_index_slow PROPERTIES TIMEOUT 300 LABELS deep)
 
+# Phase 3 / Step 3: the DEVICE-shaped retrograde sweep (tb_sweep_device.hpp,
+# run Jacobi on the host by sweep_host_reference) must converge to the same table
+# as solve_sweep_comb. CH_HD, so this HOST test is a full local Phase 3 gate; the
+# device half is cuda/sweep_check.cu. Fast tier = 3-man (KRK/KQK); slow tier adds
+# KQKR (minutes on the host — the reason the real run is on the GPU).
+add_executable(test_tb_sweep_device test_tb_sweep_device.cpp)
+target_link_libraries(test_tb_sweep_device PRIVATE chess_engine chess_project_options)
+add_test(NAME tb_sweep_device COMMAND test_tb_sweep_device)
+
+# Phase 3 / Step 2: the DEVICE-shaped move generator (movegen_dev::generate_legal
+# over Position + slider::DeviceSliders, movegen_device.hpp) must match
+# movegen::generate_legal at every node of the standard perft trees. CH_HD, so
+# this HOST test is a full local gate for the GPU movegen port; the device half
+# is cuda/movegen_check.cu. Fast tier = shallow depths; slow tier = deeper.
+add_executable(test_movegen_device test_movegen_device.cpp)
+target_link_libraries(test_movegen_device PRIVATE chess_engine chess_project_options)
+add_test(NAME movegen_device COMMAND test_movegen_device)
+add_test(NAME movegen_device_slow COMMAND test_movegen_device slow)
+set_tests_properties(movegen_device_slow PROPERTIES TIMEOUT 300 LABELS deep)
+
 # Phase 3 / Step 1c: the DEVICE-shaped combinatorial index (comb_encode/
 # comb_decode over POD descriptors, tb_comb_index_device.hpp) must compute
 # exactly what tb::CombIndex does. The functions are CH_HD, so this HOST test is

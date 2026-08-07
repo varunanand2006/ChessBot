@@ -57,37 +57,37 @@ constexpr uint16_t PROMO_BIT  = 0x8;
 constexpr uint16_t CAPTURE_BIT = 0x4;
 }  // namespace detail
 
-constexpr Move make_move(Square from, Square to, MoveFlag flag = MoveFlag::Quiet) {
+CH_HD constexpr Move make_move(Square from, Square to, MoveFlag flag = MoveFlag::Quiet) {
     return static_cast<Move>(
         (static_cast<uint16_t>(sq_index(from)) << detail::FROM_SHIFT) |
         (static_cast<uint16_t>(sq_index(to))   << detail::TO_SHIFT) |
         (static_cast<uint16_t>(flag)           << detail::FLAG_SHIFT));
 }
 
-constexpr Square move_from(Move m) {
+CH_HD constexpr Square move_from(Move m) {
     return static_cast<Square>((m >> detail::FROM_SHIFT) & detail::SQ_MASK);
 }
-constexpr Square move_to(Move m) {
+CH_HD constexpr Square move_to(Move m) {
     return static_cast<Square>((m >> detail::TO_SHIFT) & detail::SQ_MASK);
 }
-constexpr MoveFlag move_flag(Move m) {
+CH_HD constexpr MoveFlag move_flag(Move m) {
     return static_cast<MoveFlag>((m >> detail::FLAG_SHIFT) & detail::FLAG_MASK);
 }
 
-constexpr bool is_capture(Move m) {
+CH_HD constexpr bool is_capture(Move m) {
     return ((m >> detail::FLAG_SHIFT) & detail::CAPTURE_BIT) != 0;
 }
-constexpr bool is_promotion(Move m) {
+CH_HD constexpr bool is_promotion(Move m) {
     return ((m >> detail::FLAG_SHIFT) & detail::PROMO_BIT) != 0;
 }
-constexpr bool is_en_passant(Move m) {
+CH_HD constexpr bool is_en_passant(Move m) {
     return move_flag(m) == MoveFlag::EnPassant;
 }
 
 // Valid only when is_promotion(m). bits1-0 of the flag select the piece:
 // 0->Knight, 1->Bishop, 2->Rook, 3->Queen. PieceType orders these 1..4, so the
 // promoted type is just Knight + those two bits.
-constexpr PieceType promotion_type(Move m) {
+CH_HD constexpr PieceType promotion_type(Move m) {
     const uint16_t sub = (m >> detail::FLAG_SHIFT) & 0x3;
     return static_cast<PieceType>(type_index(PieceType::Knight) + sub);
 }
@@ -118,12 +118,12 @@ struct MoveList {
     Move moves[256];
     int  count = 0;
 
-    void add(Move m) { moves[count++] = m; }
-    void clear() { count = 0; }
-    int  size() const { return count; }
-    Move operator[](int i) const { return moves[i]; }
+    CH_HD void add(Move m) { moves[count++] = m; }
+    CH_HD void clear() { count = 0; }
+    CH_HD int  size() const { return count; }
+    CH_HD Move operator[](int i) const { return moves[i]; }
 
     // Range-for support.
-    const Move* begin() const { return moves; }
-    const Move* end() const { return moves + count; }
+    CH_HD const Move* begin() const { return moves; }
+    CH_HD const Move* end() const { return moves + count; }
 };
