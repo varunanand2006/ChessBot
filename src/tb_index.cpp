@@ -6,34 +6,11 @@
 #include "attacks.hpp"
 #include "bitboard.hpp"
 #include "slider.hpp"
+#include "tb_symmetry.hpp"  // shared D4 transforms (was a local runtime copy)
 
 namespace tb {
 
 namespace {
-
-// The 8 elements of D4 as square permutations [transform][square]. See the
-// 3-man version for the (file,rank) formulas; these are the symmetries that
-// leave a pawnless board equivalent.
-int SYM[8][64];
-bool g_sym_ready = false;
-
-int sq_of(int file, int rank) { return rank * 8 + file; }
-
-void init_sym() {
-    if (g_sym_ready) return;
-    for (int s = 0; s < 64; ++s) {
-        const int f = s & 7, r = s >> 3;
-        SYM[0][s] = sq_of(f, r);
-        SYM[1][s] = sq_of(7 - f, r);
-        SYM[2][s] = sq_of(f, 7 - r);
-        SYM[3][s] = sq_of(7 - f, 7 - r);
-        SYM[4][s] = sq_of(r, f);
-        SYM[5][s] = sq_of(7 - r, 7 - f);
-        SYM[6][s] = sq_of(r, 7 - f);
-        SYM[7][s] = sq_of(7 - r, f);
-    }
-    g_sym_ready = true;
-}
 
 Bitboard piece_attacks(PieceType pt, int sq, Bitboard occ) {
     const Square s = static_cast<Square>(sq);
@@ -84,7 +61,7 @@ uint32_t Index::canonical_spatial(const int* squares) const {
     for (int g = 0; g < 8; ++g) {
         uint32_t code = 0;
         for (int i = 0; i < men_; ++i)
-            code = code * 64u + static_cast<uint32_t>(SYM[g][squares[i]]);
+            code = code * 64u + static_cast<uint32_t>(transform_square(g, squares[i]));
         if (code < best) best = code;
     }
     return best;
@@ -99,7 +76,6 @@ Index::Index(std::vector<Piece> extras) : extras_(std::move(extras)) {
         std::abort();
     }
 
-    init_sym();
     slider::init();  // legality checks for sliders need the magic tables
 
     uint64_t spatial_space = 1;

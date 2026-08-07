@@ -123,6 +123,14 @@ cmake --build build-debug
 # Verify generated tables vs the Lichess tablebase API (needs network + curl)
 python python/verify_tablebase.py 25 KQK KRK KQKR
 
+# 5-man combinatorial indexer tests (fast tiers auto-run in ctest)
+./build/tests/test_combinatorial.exe        # rank/unrank number system
+./build/tests/test_tb_king_table.exe        # 462 canonical king-pair table
+./build/tests/test_tb_comb_index.exe        # comb encode/decode (fast 3-man)
+./build/tests/test_tb_comb_index.exe slow   # +4-man, duplicate pieces, 5-man
+./build/tests/test_tb_comb_solve.exe        # memoryless sweep == dense (3-man)
+./build/tests/test_tb_comb_solve.exe slow   # MANUAL: 4-man KQKR, ~10 min
+
 # Regenerate the eval tables from the Python Texel constants (one-off)
 python python/gen_eval_tables.py > src/eval_tables.inc
 ```
@@ -218,23 +226,76 @@ BFS uses a min-priority-queue (not the old 3-man FIFO) because capture-exits
 inject win/loss results at arbitrary DTM, out of natural discovery order;
 `std::vector` allowed here (offline gen, not the search hot path).
 
+### Phase 2.5 (5-man combinatorial indexer) — INDEX COMPLETE, full solve deferred to GPU
+
+The dense `64^men` `tb::Index` is ~134 MB at 4 men and explodes at 5. Phase 2.5
+replaces it with an *arithmetic combinatorial* index so 5-man (and identical
+pieces) become feasible. Built and gated one step at a time; the parts are
+CUDA-portable by design (the device kernels will reuse this exact arithmetic).
+
+- **Combinatorial number system** (`include/combinatorial.hpp`, header-only
+  constexpr, NO chess types): `combo::binom` (compile-time Pascal triangle, n≤64;
+  largest C(64,32)=1.83e18 fits uint64) + `rank_combination`/`unrank_combination`
+  (pointer-based). Gate `test_combinatorial`: Pascal/symmetry/anchors, round-trip
+  both ways, full bijection by independent subset enumeration.
+- **King-anchored king table** (`tb_king_table.{hpp,cpp}`): legal (wk,bk)→dense
+  canonical id + the D4 transform reaching canonical. Anchors symmetry on the
+  kings (rotate whole position into that frame) instead of the whole-tuple
+  min-code, so pieces can be placed combinatorially without enumerating 64^men.
+  **462 canonical configs / 3612 legal pairs.** Stabilizer caveat (deliberate,
+  commented): on-axis king pairs pick one transform → a piece placement and its
+  residual-symmetry mirror get DIFFERENT indices (mild over-count, ~2%), but two
+  distinct positions NEVER collide. Gate `test_tb_king_table`: its symmetry
+  partition of the 3612 pairs is identical (bijective) to `tb::Index` on bare
+  kings — king-anchored folding == the already-verified whole-tuple folding.
+- **CombIndex** (`tb_comb_index.{hpp,cpp}`): mixed-radix `index = king_id`, then
+  per group `index = index*C(R_G,|G|) + rank(group squares among empties)`, then
+  `*2 + stm`. Groups = identical (color,type) pieces (unordered subset → radix
+  C(R,m)); radices are per-material constants so decode peels with div/mod. Gate
+  `test_tb_comb_index` (fast 3-man / `slow` 4-man+dup+5-man): **Gate A** full
+  self-bijection `encode(decode(i))==i` (KRK/KQK/KQKR/**KRRK** duplicate; sampled
+  for 5-man **KQRKR** size 209,674,080); **Gate B** regression vs dense
+  `tb::Index` — every legal dense class encodes to a comb index whose decode is
+  symmetry-equivalent, and no two distinct legal orbits collide. comb is looser
+  than dense (KQKR comb 3.49M vs dense 2.47M): includes illegal-for-other-reasons
+  placements + the on-axis over-count (deliberate "overcount, filter at solve").
+- **Memoryless combinatorial sweep** (`tb_solve_comb.cpp`,
+  `tb::solve_sweep_comb`): the GPU-faithful solver shape — stores only value[N]
+  int16, **regenerates every move each pass** in place, iterates to fixpoint
+  (vs. the dense solver materializing the whole forward graph = billions of edges
+  / tens of GB at 5-man). Distinct pieces only (capture-exit detection = which
+  (color,type) bitboard emptied); capture boundaries from dense sub-tables. Gate
+  `test_tb_comb_solve` (fast 3-man auto; **4-man KQKR is MANUAL** —
+  `./build/tests/test_tb_comb_solve.exe slow`, ~10 min): the comb sweep value ==
+  the dense `solve_sweep` value for EVERY legal position — KRK (50,015), KQK
+  (46,137), KQKR (all 2,467,122, maxWinDTM=69 = mate-in-35, 43 passes).
+- **Baseline (single-thread memoryless): KQKR ~10.5 min wall** (3.49M positions,
+  43 passes) — ~100× the materialized dense solver because moves are regenerated
+  every pass. This is the CPU baseline the CUDA sweep must beat. A full 5-man is
+  ~15–20 h single-threaded → **DECISION: the actual full 5-man table is generated
+  on the GPU in Phase 3** (its stated purpose), not ground out on CPU here. The
+  index + solver path is validated and ready to feed the GPU port.
+
 ### >>> PICK UP HERE <<<
 
-Next candidate steps (pick per goal — GPU relevance vs. table coverage):
-- **External verification (Phase 4 seed):** spot-check generated DTM against
-  Gaviota (DTM metric) or the Lichess tablebase API — e.g. the KQKR deepest FEN
-  `8/8/8/8/2r5/8/2k5/K6Q w - - 0 1` should be mate-in-35. Cheap confidence before
-  committing to the GPU port.
-- **5-man** needs *arithmetic combinatorial* indexing (direct 64^men table is
-  ~134MB at 4 men, far too big at 5). This is the natural next indexer step and
-  what makes the workload genuinely GPU-worthy.
-- **Identical-piece materials** (e.g. KRRK, KQKQ) need unordered indexing; the
-  CLI already rejects them with a clear message.
-- **Pawns:** reduce symmetry (verify the CLAUDE "4-fold" claim — pawns leave only
-  the left-right mirror = 2-fold spatially) and add promotion/capture DAG edges.
-- **GPU (Phase 3)** needs a rented NVIDIA GPU with root (for Nsight perf
-  counters); budget ~$10, plan = compile locally, short RunPod/Vast burst to run
-  + profile. Worth it once 4/5-man tables exist (3-man is too small).
+The 5-man index + memoryless-sweep path is DONE and validated; the full 5-man
+solve is intentionally deferred to the GPU. Next candidate steps:
+- **GPU (Phase 3) — the main line.** Port `solve_sweep_comb`'s per-pass update to
+  a CUDA kernel over the CombIndex space: device-side decode/movegen/encode,
+  per-pass DTM update, convergence reduction. The combinatorial arithmetic
+  (`combinatorial.hpp`), the king table, and the sweep shape were all built to
+  port verbatim. Needs a rented NVIDIA GPU + root for Nsight (~$10 RunPod/Vast
+  burst; compile locally, short run to profile). Headline metric = achieved
+  memory bandwidth. This is the portfolio spine.
+- **(Optional, if a CPU 5-man table is wanted before the GPU)** parallelize the
+  sweep (double-buffered Jacobi across cores) — a real CPU baseline artifact —
+  then verify one 5-man vs the Lichess API. Also needs: skip the unused
+  compute_zobrist in the sweep decode; count-based capture detection for
+  duplicate-piece 5-man (KRRKN etc.); RAM check (int16 table ~210–420 MB).
+- **Identical-piece / pawn coverage:** CombIndex already indexes duplicates
+  (KRRK gate passes); the SOLVER still needs count-based capture detection for
+  them. Pawns reduce symmetry to 2-fold (left-right mirror only) + need
+  promotion/capture DAG edges — a separate indexer variant.
 
 ---
 

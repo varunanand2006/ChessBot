@@ -99,9 +99,6 @@ Graph build_graph(const Index& idx, const std::vector<SubTable>& subs) {
     return g;
 }
 
-// Move a mate score one ply further from mate (toward zero).
-int age(int x) { return x > 0 ? x - 1 : (x < 0 ? x + 1 : 0); }
-
 void fill_stats(Table& t) {
     for (const int16_t v : t.value) {
         if (v > 0) { ++t.wins;  if (win_dtm(v)  > t.max_win_dtm)  t.max_win_dtm  = win_dtm(v); }
