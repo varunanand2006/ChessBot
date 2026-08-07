@@ -23,3 +23,14 @@ set_target_properties(cuda_hello PROPERTIES
 # and device agree). On a CPU-only machine this whole subdirectory is skipped,
 # so the test simply doesn't exist there — it only appears on a box with a GPU.
 add_test(NAME cuda_hello COMMAND cuda_hello)
+
+# --- Phase 1 (primitives): device combinatorics + D4 vs host ---------------
+# Runs the CH_HD-annotated combinatorial.hpp / tb_symmetry.hpp on the device and
+# diffs bit-exact against the host. The prerequisite gate for the device
+# CombIndex port.
+add_executable(cuda_index_check index_check.cu)
+target_include_directories(cuda_index_check PRIVATE ${CMAKE_SOURCE_DIR}/include)
+set_target_properties(cuda_index_check PROPERTIES
+        CUDA_STANDARD 20
+        CUDA_STANDARD_REQUIRED ON)
+add_test(NAME cuda_index_check COMMAND cuda_index_check)

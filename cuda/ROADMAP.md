@@ -38,10 +38,30 @@ shared headers compile for both, a hello-kernel + a device↔host equality harne
   Exit 0 / "PASS: host == device on all 1048576 values (CH_HD verified)" is the
   gate. On CMake <3.24 pass `-DCMAKE_CUDA_ARCHITECTURES=89` (RTX 4090 = sm_89).
 
-**Phase 1 — Index primitives**
+**Phase 1 — Index primitives** — **1a done (local); 1b written (on-box gate); 1c next**
 Port `combinatorial` (binom → shrunk `__constant__`, rank/unrank as `CH_HD`), D4
 transforms, king table → device arrays.
 **Gate:** device decode/encode == host `CombIndex` on a batch of indices.
+
+- **1a — annotate primitives (DONE, locally gated).** `combinatorial.hpp`
+  (`binom`/`rank_combination`/`unrank_combination`) and `tb_symmetry.hpp`
+  (`transform_square`) now carry `CH_HD`. Since `CH_HD` is empty on the host,
+  the CPU build + all 17 fast tests pass unchanged — the local gate for "the
+  annotation didn't perturb host code."
+- **1b — device primitives harness (WRITTEN; gate runs on the box).**
+  `cuda/index_check.cu` runs `binom` (whole 0..64 triangle), `rank`/`unrank`
+  round-trip over a grid of (n,k), and the D4 table on the DEVICE, diffing
+  bit-exact against the host. ctest `cuda_index_check`. Compiles only where nvcc
+  exists. Binom table + D4 stay constexpr namespace arrays for now; the
+  `__constant__` shrink (checklist item 2) is a Phase 4 perf change, not needed
+  for correctness.
+- **1c — device CombIndex (NEXT).** Upload the king table (id_[4096],
+  transform_[4096], canon_pair_[462]) + a fixed per-material group descriptor as
+  device arrays; device `encode`/`decode` mirroring `CombIndex`; diff device vs
+  host on a batch of indices (KRK/KQK, then KQKR). This is the step whose gate is
+  the phase's stated gate. Keep the `int empty[64]` form first (mirror host
+  exactly for a clean diff); the bitmask+popcount rewrite (checklist item 1) is
+  Phase 4.
 
 **Phase 2 — Move generation + make/unmake**
 Magic sliders + attack tables → `__constant__`; `Position`/`MoveList` device-side.

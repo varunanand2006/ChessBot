@@ -23,6 +23,9 @@
 #include <array>
 #include <cstdint>
 
+#include "cuda_compat.hpp"  // CH_HD — makes the runtime-callable functions below
+                            // compile for the CUDA device as well as the host.
+
 namespace combo {
 
 // Board has 64 squares, so no combination we index draws from more than 64
@@ -47,7 +50,7 @@ inline constexpr auto kBinom = make_binom();
 
 // C(n, k), with out-of-range arguments defined to 0 (k<0, k>n) — matches the
 // convention the rank/unrank recurrences rely on at their boundaries.
-constexpr uint64_t binom(int n, int k) {
+CH_HD constexpr uint64_t binom(int n, int k) {
     if (n < 0 || k < 0 || k > n || n > kMaxN) return 0;
     return kBinom[n][k];
 }
@@ -63,7 +66,7 @@ constexpr uint64_t binom(int n, int k) {
 // bijection between k-subsets of {0,1,2,...} and the non-negative integers; for
 // subsets of {0..n-1} the image is exactly [0, C(n,k)). It does not depend on n
 // itself — n only bounds the range — so the same code indexes any board size.
-constexpr uint64_t rank_combination(const int* elems, int k) {
+CH_HD constexpr uint64_t rank_combination(const int* elems, int k) {
     uint64_t r = 0;
     for (int i = 0; i < k; ++i) r += binom(elems[i], i + 1);
     return r;
@@ -75,7 +78,7 @@ constexpr uint64_t rank_combination(const int* elems, int k) {
 // Greedy from the largest element down: the (i+1)-th smallest element is the
 // largest c with C(c, i+1) <= remaining rank (its minimum possible value is i,
 // since i smaller elements sit below it). Subtract its contribution and recurse.
-constexpr void unrank_combination(uint64_t r, int k, int* out) {
+CH_HD constexpr void unrank_combination(uint64_t r, int k, int* out) {
     for (int i = k - 1; i >= 0; --i) {
         int c = i;
         // Grow to the largest fitting element. The `c + 1 < kMaxN` bound is a

@@ -15,6 +15,8 @@
 #include <array>
 #include <cstdint>
 
+#include "cuda_compat.hpp"  // CH_HD — transform_square is called from device code.
+
 namespace tb {
 
 // Square s -> its image under each transform. Stored uint8_t (squares are 0..63)
@@ -40,6 +42,6 @@ constexpr std::array<std::array<uint8_t, 64>, 8> make_d4_table() {
 inline constexpr auto D4 = make_d4_table();
 
 // Apply D4 transform g in [0,8) to square s in [0,64).
-constexpr int transform_square(int g, int s) { return D4[g][s]; }
+CH_HD constexpr int transform_square(int g, int s) { return D4[g][s]; }
 
 }  // namespace tb
