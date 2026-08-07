@@ -62,6 +62,16 @@ measure before assuming. Candidates, each oracle-gated after applying:
    budget → keep in global as `const __restrict__` and load via `__ldg` (read-only
    data cache), which suits our scattered per-square access better than
    `__constant__` broadcast anyway. Measure both.
+   - **APPLIED (the value/sub buffers):** `v_old`, `v_new`, `state`, `subs` on
+     the kernel and `v_old` + the hoisted `s.value` local in `sweep_update` are
+     now `const __restrict__`, so the scattered child gathers
+     `v_old[encode(child)]` / `s.value[encode(child)]` route through the
+     read-only cache (LDG). This is the zero-risk member of candidate #3: a pure
+     aliasing hint (the ping-pong buffers provably never alias within a pass),
+     correctness unchanged — the host sweep gate still diffs the fixpoint
+     bit-for-bit. Confirm the win on the box via `l2_tex__t_sector_hit_rate`.
+     The `__constant__` placement of the small tables is the part still pending
+     Nsight.
 4. **Live-node work-list (divergence).** Only `SW_SOLVE` nodes do work; the rest
    idle in-warp. If `thread_inst..ratio` is low, compact SOLVE indices into a
    dense work-list (built once on the host, or a stream-compaction each pass) so
@@ -73,6 +83,21 @@ measure before assuming. Candidates, each oracle-gated after applying:
 6. **Buffer minimalism.** `int16` value buffers are already minimal. `state[]`
    (1 B/pos) could be folded into a sentinel value in the buffer after pass 0 —
    minor, only if bandwidth-bound and every byte counts.
+
+## Considered and rejected
+
+- **Zero-copy (mapped) memory for the `changed` flag.** Tempting — it removes the
+  per-pass `cudaMemset` + 4-byte `cudaMemcpy`. Rejected because it conflicts with
+  the `atomicOr(changed, 1)` convergence write: mapping the flag into host memory
+  turns every changing thread's atomic into an atomic *over PCIe to system
+  memory*, so on early/busy passes we'd pay thousands-to-millions of PCIe atomic
+  transactions per pass — an unbounded cost — to save one tiny bounded copy. The
+  synchronous wait is unchanged either way (`cudaDeviceSynchronize()` still
+  required before reading the flag), and the flag is entirely off the headline
+  `dram__throughput` metric (that's per-kernel device bandwidth). If per-pass host
+  overhead ever *did* matter, the right fix is the opposite direction — keep the
+  flag in fast device memory and check convergence only every K passes (amortize
+  the sync), not push the hot atomic across the bus.
 
 ## Workflow on the box
 

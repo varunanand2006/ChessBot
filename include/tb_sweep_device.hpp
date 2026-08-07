@@ -90,7 +90,17 @@ CH_HD inline uint64_t sweep_encode_position(const Position& p,
 // The per-node retrograde update. Precondition: state[i] == SW_SOLVE. Returns the
 // node's new value = max over legal moves of age(-child). subs has one entry per
 // group (subs[g] = material minus group g's piece).
-CH_HD inline int16_t sweep_update(uint64_t i, const int16_t* v_old,
+//
+// `v_old` is __restrict__ because the child lookups (v_old[encode(child)]) are a
+// scattered retrograde gather — the worst-latency reads in the kernel. The
+// restrict promise is TRUE: within a pass v_old is a distinct ping-pong buffer
+// that never aliases v_new/state/subs, and no local aliases it either. That lets
+// nvcc route the gather through the read-only data cache (LDG), which suits
+// scattered reads better than an ordinary global load. Pure compiler hint —
+// correctness is unchanged (the host gate still diffs the fixpoint bit-for-bit);
+// the benefit is GPU-only and shows up as l2/tex hit rate in Nsight. On host
+// (GCC) __restrict__ is a no-op-ish aliasing hint, equally harmless.
+CH_HD inline int16_t sweep_update(uint64_t i, const int16_t* __restrict__ v_old,
                                   const DeviceKingTable& kt,
                                   const DeviceMaterial& mat,
                                   const slider::DeviceSliders& S,
@@ -121,7 +131,10 @@ CH_HD inline int16_t sweep_update(uint64_t i, const int16_t* v_old,
             child = v_old[sweep_encode_position(pos, kt, mat)];
         } else {
             const DeviceSub& s = subs[captured];
-            child = s.draw ? 0 : s.value[sweep_encode_position(pos, kt, s.mat)];
+            // Hoist to a restrict local so the sub-table probe (also a scattered
+            // gather) gets the same read-only-cache treatment as the v_old gather.
+            const int16_t* __restrict__ sv = s.value;
+            child = s.draw ? 0 : sv[sweep_encode_position(pos, kt, s.mat)];
         }
 
         movegen_dev::unmake_move(pos, m, st);

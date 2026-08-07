@@ -38,20 +38,30 @@
     } while (0)
 
 // One pass of the sweep: one thread per position. SOLVE nodes recompute their
-// value = max over moves of age(-child); everything else copies through. A
-// device `changed` flag (set with a plain write — any thread setting it is
-// enough, no atomic needed for a boolean "did anything change") drives host
-// convergence.
-__global__ void k_sweep_pass(uint64_t n, const int16_t* v_old, int16_t* v_new,
-                             const uint8_t* state, tb::DeviceKingTable kt,
-                             tb::DeviceMaterial mat, slider::DeviceSliders S,
-                             const tb::DeviceSub* subs, int* changed) {
+// value = max over moves of age(-child); everything else copies through. The
+// `changed` flag drives host convergence. Correctness never depended on an
+// atomic here — every writer stores the identical value 1 to one aligned word,
+// so any interleaving yields 1 — but a plain write is a formal data race that
+// compute-sanitizer flags. atomicOr is the sanitizer-clean equivalent at
+// negligible cost: it fires at most once per thread and only on passes that
+// actually change something (the last, converging pass sets it zero times).
+// v_old/v_new/state/subs are __restrict__: they are four distinct device
+// allocations that never alias (v_old and v_new are the ping-pong buffers,
+// swapped between passes but always distinct within a pass). This lets nvcc load
+// the scattered child gathers in sweep_update through the read-only data cache
+// (LDG). Correctness-neutral (a pure aliasing hint); the win is GPU-only.
+__global__ void k_sweep_pass(uint64_t n, const int16_t* __restrict__ v_old,
+                             int16_t* __restrict__ v_new,
+                             const uint8_t* __restrict__ state,
+                             tb::DeviceKingTable kt, tb::DeviceMaterial mat,
+                             slider::DeviceSliders S,
+                             const tb::DeviceSub* __restrict__ subs, int* changed) {
     uint64_t i = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (i >= n) return;
     if (state[i] != tb::SW_SOLVE) { v_new[i] = v_old[i]; return; }
     const int16_t nv = tb::sweep_update(i, v_old, kt, mat, S, subs);
     v_new[i] = nv;
-    if (nv != v_old[i]) *changed = 1;
+    if (nv != v_old[i]) atomicOr(changed, 1);
 }
 
 // --- small upload helpers --------------------------------------------------
@@ -161,6 +171,7 @@ int main(int argc, char** argv) {
         if (!changed) break;
         if (passes > tb::MATE) {  // safety net; a correct sweep converges long before
             std::fprintf(stderr, "did not converge\n");
+            cudaEventDestroy(t0); cudaEventDestroy(t1);
             for (void* p : frees) cudaFree(p);
             return 2;
         }

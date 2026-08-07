@@ -138,9 +138,17 @@ int main() {
     using PT = PieceType;
     const Color W = Color::White, B = Color::Black;
 
+    // `step` is the sampling stride: host_pos holds N/step decoded Positions
+    // (~80 B each). Keep N/step bounded — a 5-man material (KQRKR ~209M indices)
+    // at step=1 would need ~16 GB of host RAM for host_pos ALONE, choking a small
+    // rented instance before the GPU runs. Scale step up with material size.
     run_material({{W, PT::Rook}},                 "KRK",  dev_s, 1);   // full 57k
     run_material({{W, PT::Queen}},                "KQK",  dev_s, 1);   // full 57k
     run_material({{W, PT::Queen}, {B, PT::Rook}}, "KQKR", dev_s, 3);   // ~1.16M sample
+
+    // Free the uploaded magic tables (the per-material scratch is freed inside
+    // run_material). Harmless at process exit, but leak-clean for reuse.
+    cudaFree(d_rm); cudaFree(d_bm); cudaFree(d_rt); cudaFree(d_bt);
 
     if (g_fail == 0) {
         std::printf("PASS: device movegen == host over all sampled TB positions.\n");

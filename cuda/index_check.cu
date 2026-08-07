@@ -85,10 +85,11 @@ int main() {
         CUDA_CHECK(cudaDeviceSynchronize());
         uint64_t* h = (uint64_t*)std::malloc(N * sizeof(uint64_t));
         CUDA_CHECK(cudaMemcpy(h, d, N * sizeof(uint64_t), cudaMemcpyDeviceToHost));
-        for (int n = 0; n <= 64; ++n)
+        bool mism = false;
+        for (int n = 0; n <= 64 && !mism; ++n)
             for (int k = 0; k <= 64; ++k)
                 if (h[n * 65 + k] != combo::binom(n, k))
-                    { fail("binom device != host"); n = 100; break; }
+                    { fail("binom device != host"); mism = true; break; }
         std::free(h); CUDA_CHECK(cudaFree(d));
     }
 
@@ -116,12 +117,13 @@ int main() {
                                   cudaMemcpyDeviceToHost));
 
             int ref[16];
-            for (uint64_t r = 0; r < total; ++r) {
+            bool mism = false;
+            for (uint64_t r = 0; r < total && !mism; ++r) {
                 if (h_rr[r] != r) { fail("rank(unrank(r)) != r on device"); break; }
                 combo::unrank_combination(r, c.k, ref);  // host reference
                 for (int i = 0; i < c.k; ++i)
                     if (h_elems[r * c.k + i] != ref[i])
-                        { fail("device unrank != host unrank"); r = total; break; }
+                        { fail("device unrank != host unrank"); mism = true; break; }
             }
             std::free(h_elems); std::free(h_rr);
             CUDA_CHECK(cudaFree(d_elems)); CUDA_CHECK(cudaFree(d_rr));
@@ -137,10 +139,11 @@ int main() {
         CUDA_CHECK(cudaDeviceSynchronize());
         int* h = (int*)std::malloc(N * sizeof(int));
         CUDA_CHECK(cudaMemcpy(h, d, N * sizeof(int), cudaMemcpyDeviceToHost));
-        for (int g = 0; g < 8; ++g)
+        bool mism = false;
+        for (int g = 0; g < 8 && !mism; ++g)
             for (int s = 0; s < 64; ++s)
                 if (h[g * 64 + s] != tb::transform_square(g, s))
-                    { fail("transform_square device != host"); g = 100; break; }
+                    { fail("transform_square device != host"); mism = true; break; }
         std::free(h); CUDA_CHECK(cudaFree(d));
     }
 
