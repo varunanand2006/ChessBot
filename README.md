@@ -1,12 +1,133 @@
-# Chess Engine
+# Chess Engine — C++/CUDA rewrite
 
-A fully functional chess engine written in Python from scratch. Features a terminal interface and a Pygame GUI with a dark luxury theme. Built incrementally — each optimization layer is documented below with its purpose and the speed/strength tradeoff it introduces.
+A ~1600-ELO chess engine — originally written from scratch in Python (fully
+documented in **[The origin — Python engine](#the-origin--python-engine)** below)
+— rewritten in data-oriented **C++20** (bitboard move generation, alpha-beta
+search, a Texel-tuned evaluation), plus a **CUDA** component that generates
+endgame tablebases by GPU retrograde analysis.
 
-**Estimated strength: ~1400–1800 ELO**
+This is a portfolio project targeting GPU/systems roles. Two rules shape every
+commit: **measurable, absolute performance numbers are first-class deliverables**
+(reported as NPS / positions·s⁻¹ / GB·s⁻¹ — never % speedups), and **every
+performance-relevant choice carries a rationale comment** naming what the
+alternative would have cost.
 
-![Python](https://img.shields.io/badge/Python-3.11%2B-blue) ![PyPy](https://img.shields.io/badge/PyPy-3.11-orange) ![Pygame](https://img.shields.io/badge/Pygame-2.6-green)
+![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C) ![CUDA](https://img.shields.io/badge/CUDA-retrograde%20TB-76B900) ![CMake](https://img.shields.io/badge/CMake-%E2%89%A53.20-064F8C) ![Python origin](https://img.shields.io/badge/origin-Python%203.11%20%2F%20PyPy-blue)
 
 ---
+
+## Architecture
+
+- **CPU side — C++ engine.** Struct-of-bitboards board (`by_type[6]` +
+  `by_color[2]`, no mailbox), magic-bitboard sliders (chosen over BMI2 PEXT so
+  the same multiply-shift ports to the GPU), make/unmake with a caller-owned
+  `StateInfo` stack, Zobrist keys as a correctness invariant, iterative-deepening
+  alpha-beta with a flat-array transposition table and quiescence.
+- **GPU side — CUDA endgame tablebases.** Dense retrograde-analysis sweep over an
+  integer-indexed position space, iterated to convergence — a bandwidth-bound
+  frontier BFS. The CPU tablebase solver (`solve_sweep_comb`) is the **bit-exact
+  oracle**: every device step is diffed against it before it is trusted.
+- **Explicitly rejected** (with rationale in `CLAUDE.md`): NNUE over PCIe
+  (scope); MCTS/AlphaZero search (bad GPU workload — irregular tree, warp
+  divergence, atomic contention).
+
+## Build / test / benchmark (C++)
+
+Toolchain: GCC (MinGW-w64 UCRT) + CMake ≥3.20 + Ninja. Release is `-O3
+-march=native`; the CUDA targets appear only when a CUDA compiler is present.
+
+```bash
+# Configure + build (Release by default)
+cmake -B build
+cmake --build build
+
+# Fast test suite (excludes the ~28s deep perft); or drop -E for everything
+ctest --test-dir build -E perft_deep
+
+# Perft, NPS, search-throughput, tablebase-generation benchmarks
+./build/chess.exe perft 6
+./build/benchmarks/bench.exe 3
+./build/benchmarks/search_bench.exe
+./build/benchmarks/tb_bench.exe
+
+# Inspect / use the tablebase
+./build/chess.exe tb KQKR                 # WDL + deepest-mate FEN
+./build/chess.exe search 6                # best move (per-depth line + NPS)
+./build/chess.exe play 4                  # play a game (you are White)
+```
+
+The full command list (divide, tbdump, external verification, the combinatorial
+indexer tests, eval-table regeneration) lives in `CLAUDE.md`.
+
+## Status
+
+### Engine (C++) — Phase 1 complete ✅
+
+- **Perft: exact** on the full standard set — startpos→6 = 119,060,324,
+  Kiwipete→5 = 193,690,690, positions 3/4/5/6 all exact (reference values from the
+  Chess Programming Wiki, transcribed with citation).
+- **Move generation: ~21 Mnps** aggregate (best-of-3, Release, single-threaded,
+  correctness-first make/unmake legality filter).
+- **Search: ~3.5 Mnps** aggregate — iterative-deepening alpha-beta, flat-array TT
+  (2²² direct-mapped), quiescence with delta pruning, MVV-LVA + TT move ordering,
+  a faithful port of the Python search. Absolute NPS, never % speedup.
+
+### Endgame tablebases (CPU) — 3-man + 4-man solved, 5-man indexed ✅
+
+- **Retrograde DTM solver, two independent implementations** (iterated sweep +
+  min-priority-queue BFS) that must agree. 3-man theory (KQK mate-in-10, KRK
+  mate-in-16, KBK/KNK drawn) and the first 4-man, **KQKR = mate-in-35** (both
+  solvers agree over all 2,467,122 positions — matches the known Nalimov maximum).
+- **5-man combinatorial indexer complete** — a mixed-radix `CombIndex`
+  (combinatorial number system + a 462-config king-anchored symmetry table) plus a
+  memoryless GPU-shaped sweep, all validated bit-exact against the dense oracle.
+  The *full* 5-man solve is deferred to the GPU by design (its stated purpose).
+- **Tablebase probing in search** returns exact WDL+DTM cutoffs: node reductions
+  of ~10,900× (KRK d12), ~19,900× (KQK d12), ~18,500× (KQKR d10) vs the heuristic.
+- **Externally verified:** 133/133 sampled positions match the Lichess (Gaviota
+  DTM) API on category and signed distance-to-mate across KQK/KRK/KBK/KQKR/KRKN.
+
+### CUDA port — Phases 0–3 host-gated bit-exact; Phase 4 (profiling) is GPU-only
+
+The whole port is written so the *device-shaped* code compiles and runs **on the
+host** (a `CH_HD` = `__host__ __device__` macro, empty off-nvcc), letting each
+phase be gated bit-exact against the CPU oracle *with no GPU*. What remains is
+running it on real hardware and profiling. Full detail: **[`cuda/ROADMAP.md`](cuda/ROADMAP.md)**,
+optimization plan: **[`cuda/PROFILING.md`](cuda/PROFILING.md)**.
+
+| Phase | What | Local gate (no GPU) | On-box |
+|---|---|---|---|
+| 0 · Scaffold | `CH_HD` macro, guarded CMake, hello + equality harness | CPU build unchanged | build+run gate pending |
+| 1 · Index primitives | binom / rank-unrank / D4 / king table / `CombIndex` on device | host mirror == `CombIndex`, all 3.49M KQKR + 1.75M KRRK ✅ | `cuda_index_check`, `cuda_comb_index_check` |
+| 2 · Movegen + make/unmake | magic sliders + legal movegen device-side | host == reference over 980,664 perft nodes ✅ | `cuda_slider_check`, `cuda_movegen_check` |
+| 3 · Sweep kernel | one thread/position, Jacobi ping-pong to fixpoint | host sweep == `solve_sweep_comb` (KRK/KQK) ✅; KQKR manual | `cuda_sweep_check KQKR` (all 2,467,122, mate-in-35) |
+| 4 · Profile + optimize | Nsight → bandwidth/occupancy/divergence, then apply candidates | rig ready (self-report + `profile.sh`) | **the portfolio meat** |
+| 5 · Scale | solve a real 5-man to completion | — | positions·s⁻¹ + bandwidth |
+
+**Headline metric = achieved DRAM bandwidth** (it's a bandwidth-bound dense
+sweep), measured with Nsight Compute against the CPU baseline (KQKR ~10.5 min
+single-thread memoryless). Reported as absolute GB·s⁻¹ / ms / Mpos·s⁻¹.
+
+## Repo layout
+
+```
+/            CMakeLists.txt, CLAUDE.md, README
+/include     C++ engine + device-shaped headers (CH_HD)
+/src         C++ engine sources
+/tests       perft, unit, and host-side device-gate tests (CTest)
+/benchmarks  timing harnesses (NPS, TB generation, search, probing)
+/cuda        CUDA kernels + gates (built only where nvcc exists) + ROADMAP/PROFILING
+/python      legacy Python engine — preserved, NOT modified (the project's origin)
+```
+
+---
+
+# The origin — Python engine
+
+The sections below document the original **Python** engine (~1400–1800 ELO): a
+terminal interface plus a Pygame GUI, built incrementally with each optimization
+layer's purpose and speed/strength tradeoff. It is preserved unchanged as the
+project's starting point — the C++ side mirrors its architecture, bitboard-idiomatic.
 
 ## Quick Start
 
