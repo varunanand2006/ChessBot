@@ -52,7 +52,28 @@ inline constexpr auto kBinom = make_binom();
 // convention the rank/unrank recurrences rely on at their boundaries.
 CH_HD constexpr uint64_t binom(int n, int k) {
     if (n < 0 || k < 0 || k > n || n > kMaxN) return 0;
+#ifdef __CUDA_ARCH__
+    // Device: recompute instead of loading the host kBinom table. Indexing a
+    // namespace-scope host array at runtime is an ODR-use nvcc rejects in device
+    // code ("identifier combo::kBinom is undefined in device code"). Fold to the
+    // smaller tail (C(n,k)=C(n,n-k), so k<=32), then run a rolling Pascal row of
+    // pure ADDITIONS — exact with no intermediate overflow (the multiplicative
+    // form would overflow: C(64,32)=1.83e18 times (n-i) blows past 2^64, whereas
+    // the true value itself fits < 2^63). Cost is O(n*k) adds (<=~2K) vs the
+    // host's O(1) load. The Phase 4 plan promotes kBinom to __constant__ so the
+    // device also gets an O(1) cached load; correctness-first, this computed form
+    // needs zero upload/bind plumbing and can't drift from the host recurrence
+    // (same Pascal rule).
+    if (k > n - k) k = n - k;
+    uint64_t row[kMaxN / 2 + 2] = {};    // k <= 32 after the fold
+    row[0] = 1;
+    for (int i = 1; i <= n; ++i)
+        for (int j = (i < k ? i : k); j > 0; --j)
+            row[j] += row[j - 1];
+    return row[k];
+#else
     return kBinom[n][k];
+#endif
 }
 
 // Rank a k-combination into [0, C(n, k)).

@@ -77,20 +77,23 @@ CH_HD inline void move_pc(Position& p, Color c, PieceType pt, Square a, Square b
     take(p, c, pt, a); put(p, c, pt, b);
 }
 
-// Castling-rights update table — a private copy of position.cpp's CASTLE_MASK
-// (kept self-contained so the device header pulls in no host .cpp state).
-constexpr std::array<uint8_t, 64> make_castle_mask() {
-    std::array<uint8_t, 64> m{};
-    for (int i = 0; i < 64; ++i) m[i] = ANY_CASTLING;
-    m[sq_index(Square::E1)] &= static_cast<uint8_t>(~(WHITE_OO | WHITE_OOO));
-    m[sq_index(Square::A1)] &= static_cast<uint8_t>(~WHITE_OOO);
-    m[sq_index(Square::H1)] &= static_cast<uint8_t>(~WHITE_OO);
-    m[sq_index(Square::E8)] &= static_cast<uint8_t>(~(BLACK_OO | BLACK_OOO));
-    m[sq_index(Square::A8)] &= static_cast<uint8_t>(~BLACK_OOO);
-    m[sq_index(Square::H8)] &= static_cast<uint8_t>(~BLACK_OO);
+// Castling-rights update mask for ONE square — a private copy of position.cpp's
+// CASTLE_MASK logic. A per-square function, not a namespace-scope 64-byte table,
+// because make_move is CH_HD: indexing a host array (CASTLE_MASK[sq]) at runtime
+// is an ODR-use nvcc rejects in device code ("identifier ... undefined in device
+// code"). Only the six king/rook home squares clear any rights; every other
+// square keeps all of them, so this short branch chain replaces the table at no
+// real cost — two calls per move instead of two loads, and no upload/bind.
+CH_HD inline uint8_t castle_mask(int sq) {
+    uint8_t m = ANY_CASTLING;
+    if (sq == sq_index(Square::E1))      m &= static_cast<uint8_t>(~(WHITE_OO | WHITE_OOO));
+    else if (sq == sq_index(Square::A1)) m &= static_cast<uint8_t>(~WHITE_OOO);
+    else if (sq == sq_index(Square::H1)) m &= static_cast<uint8_t>(~WHITE_OO);
+    else if (sq == sq_index(Square::E8)) m &= static_cast<uint8_t>(~(BLACK_OO | BLACK_OOO));
+    else if (sq == sq_index(Square::A8)) m &= static_cast<uint8_t>(~BLACK_OOO);
+    else if (sq == sq_index(Square::H8)) m &= static_cast<uint8_t>(~BLACK_OO);
     return m;
 }
-inline constexpr auto CASTLE_MASK = make_castle_mask();
 }  // namespace detail
 
 CH_HD inline void make_move(Position& pos, Move m, StateInfo& st) {
@@ -137,7 +140,7 @@ CH_HD inline void make_move(Position& pos, Move m, StateInfo& st) {
             pos.ep_square = make_square(file_of(from), (rank_of(from) + rank_of(to)) / 2);
     }
 
-    pos.castling &= detail::CASTLE_MASK[sq_index(from)] & detail::CASTLE_MASK[sq_index(to)];
+    pos.castling &= detail::castle_mask(sq_index(from)) & detail::castle_mask(sq_index(to));
 
     if (moving == PieceType::Pawn || is_capture(m)) pos.halfmove_clock = 0;
     else                                            ++pos.halfmove_clock;

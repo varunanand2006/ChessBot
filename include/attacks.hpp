@@ -26,38 +26,40 @@ namespace attacks {
 
 namespace detail {
 
-// Knight/king offsets as (file delta, rank delta) pairs. Bounds are checked on
-// file and rank BEFORE forming the bitboard index, so there is no board-edge
-// wraparound (the classic bitboard bug where a shift moves a-file to h-file).
-inline constexpr int KNIGHT_DF[8] = {+1, +2, +2, +1, -1, -2, -2, -1};
-inline constexpr int KNIGHT_DR[8] = {+2, +1, -1, -2, -2, -1, +1, +2};
-
-inline constexpr int KING_DF[8] = {-1, 0, +1, -1, +1, -1, 0, +1};
-inline constexpr int KING_DR[8] = {+1, +1, +1, 0, 0, -1, -1, -1};
-
-constexpr Bitboard bit(int file, int rank) {
+// bit / on_board / *_from are CH_HD for two reasons: they build the host tables
+// below at compile time, AND they are the DEVICE path of the attack accessors —
+// nvcc cannot ODR-use the host KNIGHT/KING/PAWN arrays in device code, so on the
+// GPU the accessors recompute through these (see the accessors' __CUDA_ARCH__
+// split). The knight/king offset lists are FUNCTION-LOCAL constexpr arrays rather
+// than namespace-scope ones for the same reason: a namespace-scope host array
+// indexed at runtime in device code is exactly the ODR-use that fails to compile.
+CH_HD constexpr Bitboard bit(int file, int rank) {
     return Bitboard{1} << (rank * 8 + file);
 }
 
-constexpr bool on_board(int file, int rank) {
+CH_HD constexpr bool on_board(int file, int rank) {
     return file >= 0 && file < 8 && rank >= 0 && rank < 8;
 }
 
-constexpr Bitboard knight_from(int sq) {
+CH_HD constexpr Bitboard knight_from(int sq) {
+    constexpr int DF[8] = {+1, +2, +2, +1, -1, -2, -2, -1};
+    constexpr int DR[8] = {+2, +1, -1, -2, -2, -1, +1, +2};
     Bitboard bb = 0;
     const int f = sq & 7, r = sq >> 3;
     for (int i = 0; i < 8; ++i) {
-        const int tf = f + KNIGHT_DF[i], tr = r + KNIGHT_DR[i];
+        const int tf = f + DF[i], tr = r + DR[i];
         if (on_board(tf, tr)) bb |= bit(tf, tr);
     }
     return bb;
 }
 
-constexpr Bitboard king_from(int sq) {
+CH_HD constexpr Bitboard king_from(int sq) {
+    constexpr int DF[8] = {-1, 0, +1, -1, +1, -1, 0, +1};
+    constexpr int DR[8] = {+1, +1, +1, 0, 0, -1, -1, -1};
     Bitboard bb = 0;
     const int f = sq & 7, r = sq >> 3;
     for (int i = 0; i < 8; ++i) {
-        const int tf = f + KING_DF[i], tr = r + KING_DR[i];
+        const int tf = f + DF[i], tr = r + DR[i];
         if (on_board(tf, tr)) bb |= bit(tf, tr);
     }
     return bb;
@@ -65,13 +67,15 @@ constexpr Bitboard king_from(int sq) {
 
 // Pawn ATTACKS (captures only — pushes are not attacks and are generated
 // separately). White attacks toward rank+1, Black toward rank-1, each by one
-// file left and right.
-constexpr Bitboard pawn_from(Color c, int sq) {
+// file left and right. Offsets are a local array (not an initializer_list) so
+// the loop is plainly device-compilable.
+CH_HD constexpr Bitboard pawn_from(Color c, int sq) {
+    const int dfs[2] = {-1, +1};
     Bitboard bb = 0;
     const int f = sq & 7, r = sq >> 3;
     const int dr = (c == Color::White) ? +1 : -1;
-    for (const int df : {-1, +1}) {
-        const int tf = f + df, tr = r + dr;
+    for (int i = 0; i < 2; ++i) {
+        const int tf = f + dfs[i], tr = r + dr;
         if (on_board(tf, tr)) bb |= bit(tf, tr);
     }
     return bb;
@@ -106,9 +110,33 @@ inline constexpr std::array<Bitboard, 64> KING   = detail::make_king();
 inline constexpr std::array<std::array<Bitboard, 64>, 2> PAWN = detail::make_pawn();
 
 // Query accessors. Constexpr + Square-typed so callers stay readable and the
-// index math is centralized here.
-CH_HD constexpr Bitboard knight(Square s) { return KNIGHT[sq_index(s)]; }
-CH_HD constexpr Bitboard king(Square s)   { return KING[sq_index(s)]; }
-CH_HD constexpr Bitboard pawn(Color c, Square s) { return PAWN[color_index(c)][sq_index(s)]; }
+// index math is centralized here. HOST reads the precomputed table (one branch-
+// free load in the movegen hot loop); DEVICE recomputes via the *_from helpers,
+// because nvcc cannot ODR-use the host KNIGHT/KING/PAWN arrays in device code
+// ("identifier attacks::KNIGHT is undefined in device code"). The recompute is a
+// handful of ALU ops per query; the alternative — uploading these 512 B/1 KiB
+// tables to __constant__ and binding them per device TU — is Phase-4 plumbing we
+// don't need for correctness, and on the GPU the ALU path is competitive anyway.
+CH_HD constexpr Bitboard knight(Square s) {
+#ifdef __CUDA_ARCH__
+    return detail::knight_from(sq_index(s));
+#else
+    return KNIGHT[sq_index(s)];
+#endif
+}
+CH_HD constexpr Bitboard king(Square s) {
+#ifdef __CUDA_ARCH__
+    return detail::king_from(sq_index(s));
+#else
+    return KING[sq_index(s)];
+#endif
+}
+CH_HD constexpr Bitboard pawn(Color c, Square s) {
+#ifdef __CUDA_ARCH__
+    return detail::pawn_from(c, sq_index(s));
+#else
+    return PAWN[color_index(c)][sq_index(s)];
+#endif
+}
 
 }  // namespace attacks
