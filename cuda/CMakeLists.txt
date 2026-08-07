@@ -34,3 +34,17 @@ set_target_properties(cuda_index_check PROPERTIES
         CUDA_STANDARD 20
         CUDA_STANDARD_REQUIRED ON)
 add_test(NAME cuda_index_check COMMAND cuda_index_check)
+
+# --- Phase 1c: device CombIndex encode/decode vs host CombIndex ------------
+# Runs comb_encode/comb_decode (tb_comb_index_device.hpp) on the device and
+# diffs against the host tb::CombIndex over whole materials — the stated Phase 1
+# gate. Links chess_engine for the host reference. Deliberately does NOT link
+# chess_project_options: its -O3 -march=native are bare host flags nvcc would not
+# forward through to the host compiler, and this target needs none of them.
+add_executable(cuda_comb_index_check comb_index_check.cu)
+target_include_directories(cuda_comb_index_check PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(cuda_comb_index_check PRIVATE chess_engine)
+set_target_properties(cuda_comb_index_check PROPERTIES
+        CUDA_STANDARD 20
+        CUDA_STANDARD_REQUIRED ON)
+add_test(NAME cuda_comb_index_check COMMAND cuda_comb_index_check)

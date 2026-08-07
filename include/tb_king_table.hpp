@@ -54,6 +54,13 @@ struct KingTable {
         bk = p & 63;
     }
 
+    // Raw contiguous arrays — exactly what the CUDA port uploads to the device
+    // (id/transform become __constant__, canon_pair global). Exposed read-only
+    // so the device-descriptor builder can point at them without copying.
+    const int16_t*  id_data() const { return id_.data(); }
+    const int8_t*   transform_data() const { return transform_.data(); }
+    const uint16_t* canon_pair_data() const { return canon_pair_.data(); }
+
 private:
     int                        num_canonical_ = 0;
     std::array<int16_t, 4096>  id_{};         // wk*64+bk -> canonical id (or -1)

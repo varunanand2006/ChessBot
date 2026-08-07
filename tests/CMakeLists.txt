@@ -77,6 +77,18 @@ add_test(NAME tb_comb_index COMMAND test_tb_comb_index)
 add_test(NAME tb_comb_index_slow COMMAND test_tb_comb_index slow)
 set_tests_properties(tb_comb_index_slow PROPERTIES TIMEOUT 300 LABELS deep)
 
+# Phase 3 / Step 1c: the DEVICE-shaped combinatorial index (comb_encode/
+# comb_decode over POD descriptors, tb_comb_index_device.hpp) must compute
+# exactly what tb::CombIndex does. The functions are CH_HD, so this HOST test is
+# a full local gate for the GPU port's index math (no GPU needed); the device
+# half is cuda/comb_index_check.cu. Fast tier = KRK/KQK full + KQKR/KRRK sampled;
+# slow tier sweeps KQKR and KRRK in full.
+add_executable(test_tb_comb_index_device test_tb_comb_index_device.cpp)
+target_link_libraries(test_tb_comb_index_device PRIVATE chess_engine chess_project_options)
+add_test(NAME tb_comb_index_device COMMAND test_tb_comb_index_device)
+add_test(NAME tb_comb_index_device_slow COMMAND test_tb_comb_index_device slow)
+set_tests_properties(tb_comb_index_device_slow PROPERTIES TIMEOUT 300 LABELS deep)
+
 # Phase 2 / Step 5.4: memoryless combinatorial sweep must match the dense
 # solver position-by-position. Only the fast 3-man tier is auto-registered.
 # The 4-man tier (`test_tb_comb_solve slow`, KQKR) is a MANUAL command: the

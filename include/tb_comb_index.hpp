@@ -40,6 +40,7 @@
 #include <vector>
 
 #include "position.hpp"
+#include "tb_comb_index_device.hpp"  // DeviceKingTable / DeviceMaterial (POD)
 #include "tb_index.hpp"       // reuse tb::Piece
 #include "tb_king_table.hpp"
 #include "types.hpp"
@@ -80,6 +81,14 @@ public:
     Position    make_position(const int* squares, Color stm, bool with_zobrist = true) const;
     Position    decode_pos(std::size_t index) const;
     std::size_t encode(const Position& pos) const;
+
+    // Fill the device-side POD descriptors (see tb_comb_index_device.hpp) from
+    // this material: `kt` points at the KingTable's raw arrays, `mat` copies the
+    // per-group placement constants. The GPU port uploads these; the host
+    // comb_encode/comb_decode over them are diffed against this class's
+    // encode/decode as the correctness gate. kt aliases KingTable storage owned
+    // by this CombIndex, so it stays valid only as long as this object does.
+    void fill_device(DeviceKingTable& kt, DeviceMaterial& mat) const;
 
 private:
     static constexpr int kMaxGroup = 6;  // max identical pieces in one group

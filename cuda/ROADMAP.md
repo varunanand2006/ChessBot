@@ -55,13 +55,24 @@ transforms, king table → device arrays.
   exists. Binom table + D4 stay constexpr namespace arrays for now; the
   `__constant__` shrink (checklist item 2) is a Phase 4 perf change, not needed
   for correctness.
-- **1c — device CombIndex (NEXT).** Upload the king table (id_[4096],
-  transform_[4096], canon_pair_[462]) + a fixed per-material group descriptor as
-  device arrays; device `encode`/`decode` mirroring `CombIndex`; diff device vs
-  host on a batch of indices (KRK/KQK, then KQKR). This is the step whose gate is
-  the phase's stated gate. Keep the `int empty[64]` form first (mirror host
-  exactly for a clean diff); the bitmask+popcount rewrite (checklist item 1) is
-  Phase 4.
+- **1c — device CombIndex (DONE local; device half on the box).** The device
+  port artifact is `include/tb_comb_index_device.hpp`: POD `DeviceKingTable` /
+  `DeviceMaterial` + CH_HD `comb_encode`/`comb_decode`, a line-for-line mirror of
+  `CombIndex::encode`/`decode` with no std::vector / no position.hpp (lean device
+  TU). `CombIndex::fill_device()` builds the descriptors from the KingTable's raw
+  arrays (new `id_data()`/`transform_data()`/`canon_pair_data()` accessors).
+  - **Local gate (no GPU), PASSING:** `tests/test_tb_comb_index_device.cpp` runs
+    the CH_HD mirror on the HOST and diffs it against `CombIndex` in BOTH
+    directions. Exhaustive: KRK/KQK full + **all 3,494,568 KQKR** + **all
+    1,747,284 KRRK (duplicate pieces)** match exactly (`slow`, ~8s). ctest
+    `tb_comb_index_device` (fast: full 3-man + sampled 4-man).
+  - **Device gate (on the box):** `cuda/comb_index_check.cu` uploads the
+    descriptors, runs the SAME functions in a kernel over the whole space, diffs
+    device output vs host `CombIndex`. ctest `cuda_comb_index_check`. So
+    host-mirror==CombIndex is proven on CPU and device==host-mirror is the only
+    thing the GPU must confirm.
+  - Kept the `int empty[64]` form (mirror host exactly for a clean diff); the
+    bitmask+popcount rewrite (checklist item 1) is deferred to Phase 4.
 
 **Phase 2 — Move generation + make/unmake**
 Magic sliders + attack tables → `__constant__`; `Position`/`MoveList` device-side.
