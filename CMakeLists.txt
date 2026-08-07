@@ -125,3 +125,27 @@ add_subdirectory(tests)
 
 # --- Benchmarks ------------------------------------------------------------
 add_subdirectory(benchmarks)
+
+# --- CUDA scaffold (Phase 0, optional) -------------------------------------
+# The GPU tablebase phase lives in cuda/. It is compiled ONLY when a CUDA
+# compiler is present, so this repo configures and builds identically on the
+# CPU-only dev laptop (no toolkit) and on a rented GPU box. check_language()
+# probes for nvcc WITHOUT hard-failing when it is absent — the difference
+# between "optional GPU support" and forcing every contributor to install CUDA.
+#
+# CMAKE_CUDA_ARCHITECTURES defaults to `native` (CMake >=3.24 auto-detects the
+# box's installed GPU). On an older CMake, or to cross-compile, pass it
+# explicitly, e.g. -DCMAKE_CUDA_ARCHITECTURES=89 for the RTX 4090 (Ada, sm_89).
+include(CheckLanguage)
+check_language(CUDA)
+if(CMAKE_CUDA_COMPILER)
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES native)
+    endif()
+    enable_language(CUDA)
+    message(STATUS "CUDA compiler found (${CMAKE_CUDA_COMPILER}); building cuda/ scaffold "
+                   "for arch(s): ${CMAKE_CUDA_ARCHITECTURES}")
+    add_subdirectory(cuda)
+else()
+    message(STATUS "No CUDA compiler found; skipping cuda/ (CPU-only build).")
+endif()
