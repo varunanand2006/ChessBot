@@ -53,18 +53,27 @@ inline constexpr auto kBinom = make_binom();
 CH_HD constexpr uint64_t binom(int n, int k) {
     if (n < 0 || k < 0 || k > n || n > kMaxN) return 0;
 #ifdef __CUDA_ARCH__
-    // Device: recompute instead of loading the host kBinom table. Indexing a
+    // Device: recompute instead of loading the host kBinom table (indexing a
     // namespace-scope host array at runtime is an ODR-use nvcc rejects in device
-    // code ("identifier combo::kBinom is undefined in device code"). Fold to the
-    // smaller tail (C(n,k)=C(n,n-k), so k<=32), then run a rolling Pascal row of
-    // pure ADDITIONS — exact with no intermediate overflow (the multiplicative
-    // form would overflow: C(64,32)=1.83e18 times (n-i) blows past 2^64, whereas
-    // the true value itself fits < 2^63). Cost is O(n*k) adds (<=~2K) vs the
-    // host's O(1) load. The Phase 4 plan promotes kBinom to __constant__ so the
-    // device also gets an O(1) cached load; correctness-first, this computed form
-    // needs zero upload/bind plumbing and can't drift from the host recurrence
-    // (same Pascal rule).
+    // code). Fold to the smaller tail first: C(n,k)=C(n,n-k), so k<=32.
     if (k > n - k) k = n - k;
+
+    // Small k (the ONLY case the solver hits — group sizes are 1..~3, and the
+    // unrank growth loop calls binom(c,1) which MUST be O(1) or decode degrades to
+    // O(n^2) per position): exact multiplicative form. r stays == C(n-k+i, i) after
+    // each step (an integer, so every division is exact), and for k<=20 the running
+    // product never exceeds 2^64 (C(64,20)*64 ~ 1e18 < 1.8e19). O(k), and O(1) for
+    // the k==1 hot path. This is Phase-4 candidate #3 done in arithmetic — no
+    // __constant__ table/upload plumbing.
+    if (k <= 20) {
+        uint64_t r = 1;
+        for (int i = 1; i <= k; ++i) r = r * static_cast<uint64_t>(n - k + i) / static_cast<uint64_t>(i);
+        return r;
+    }
+    // Large k (only the whole-triangle self-test reaches here, never the solver):
+    // the multiplicative partials WOULD overflow near C(64,32), so fall back to a
+    // rolling Pascal row of pure additions — exact (the value itself fits < 2^63),
+    // O(n*k) but rare.
     uint64_t row[kMaxN / 2 + 2] = {};    // k <= 32 after the fold
     row[0] = 1;
     for (int i = 1; i <= n; ++i)
