@@ -64,8 +64,23 @@ struct DeviceMaterial {
     DeviceGroup groups[kDevMaxGroup];  // #groups <= #extras <= men-2 <= 6
 };
 
+// --- bit helpers for the free-square set (candidate #2: bitmask, no empty[64]) --
+CH_HD inline int dev_popcount(uint64_t x) {
+#ifdef __CUDA_ARCH__
+    return __popcll(x);
+#else
+    int c = 0; while (x) { x &= x - 1; ++c; } return c;
+#endif
+}
+// Index of the n-th set bit (0-based) == the n-th smallest free square.
+CH_HD inline int dev_nth_set(uint64_t bb, int n) {
+    for (int s = 0; s < 64; ++s)
+        if ((bb >> s) & 1ull) { if (n == 0) return s; --n; }
+    return 63;  // unreachable when bb has > n set bits (caller guarantees)
+}
+
 // index -> squares[0..men) (slot order [wk,bk,extra0,...]) + side-to-move bit.
-// Line-for-line the mirror of CombIndex::decode.
+// Mirror of CombIndex::decode (the empty-square list is a bitmask; see helpers).
 CH_HD inline void comb_decode(uint64_t index, int* squares, int* stm_bit,
                               const DeviceKingTable& kt,
                               const DeviceMaterial& mat) {
@@ -86,29 +101,23 @@ CH_HD inline void comb_decode(uint64_t index, int* squares, int* stm_bit,
     squares[0] = cwk;
     squares[1] = cbk;
 
-    int empty[64];
-    int ne = 0;
-    for (int s = 0; s < 64; ++s)
-        if (s != cwk && s != cbk) empty[ne++] = s;
+    // Free-square set as a bitmask (bit s set => square s still available),
+    // replacing the int empty[64] scratch list (candidate #2): -256 B/thread of
+    // stack and no O(ne) compaction — a placed square is cleared with one AND.
+    uint64_t free_sq = (~0ull) & ~(1ull << cwk) & ~(1ull << cbk);
 
     for (int gi = 0; gi < mat.num_groups; ++gi) {
         const DeviceGroup& grp = mat.groups[gi];
         int coords[kDevMaxGroup];
         combo::unrank_combination(r[gi], grp.count, coords);
 
-        int gs[kDevMaxGroup];
-        for (int j = 0; j < grp.count; ++j) gs[j] = empty[coords[j]];  // ascending
-
-        for (int j = 0; j < grp.count; ++j) squares[2 + grp.slots[j]] = gs[j];
-
-        int w = 0;
-        for (int rd = 0; rd < ne; ++rd) {
-            bool placed = false;
-            for (int j = 0; j < grp.count; ++j)
-                if (empty[rd] == gs[j]) { placed = true; break; }
-            if (!placed) empty[w++] = empty[rd];
-        }
-        ne = w;
+        // Resolve every coord against the SAME pre-placement free set, THEN clear
+        // the chosen squares (coords index the empty list before this group is
+        // removed — matters for duplicate-piece groups).
+        for (int j = 0; j < grp.count; ++j)
+            squares[2 + grp.slots[j]] = dev_nth_set(free_sq, coords[j]);
+        for (int j = 0; j < grp.count; ++j)
+            free_sq &= ~(1ull << squares[2 + grp.slots[j]]);
     }
     *stm_bit = sb;
 }
@@ -127,10 +136,11 @@ CH_HD inline uint64_t comb_encode(const int* squares, int stm_bit,
     for (int i = 0; i < mat.men; ++i) t[i] = tb::transform_square(g, squares[i]);
     const int cwk = t[0], cbk = t[1];
 
-    int empty[64];
-    int ne = 0;
-    for (int s = 0; s < 64; ++s)
-        if (s != cwk && s != cbk) empty[ne++] = s;
+    // Free-square bitmask instead of int empty[64] (candidate #2). A square's
+    // coordinate among the free set is now a single popcount of the free bits
+    // below it — O(1) vs the old O(ne) linear scan — and removal is one AND. This
+    // is the hotter path: called per legal child via sweep_encode_position.
+    uint64_t free_sq = (~0ull) & ~(1ull << cwk) & ~(1ull << cbk);
 
     uint64_t index = static_cast<uint64_t>(id);
     for (int gi = 0; gi < mat.num_groups; ++gi) {
@@ -147,22 +157,12 @@ CH_HD inline uint64_t comb_encode(const int* squares, int stm_bit,
         }
 
         int coords[kDevMaxGroup];
-        for (int j = 0; j < grp.count; ++j) {
-            int pos = 0;
-            while (pos < ne && empty[pos] != gs[j]) ++pos;
-            coords[j] = pos;
-        }
+        for (int j = 0; j < grp.count; ++j)               // rank among free squares
+            coords[j] = dev_popcount(free_sq & ((1ull << gs[j]) - 1u));
         const uint64_t r = combo::rank_combination(coords, grp.count);
         index = index * grp.radix + r;
 
-        int w = 0;
-        for (int rd = 0; rd < ne; ++rd) {
-            bool placed = false;
-            for (int j = 0; j < grp.count; ++j)
-                if (empty[rd] == gs[j]) { placed = true; break; }
-            if (!placed) empty[w++] = empty[rd];
-        }
-        ne = w;
+        for (int j = 0; j < grp.count; ++j) free_sq &= ~(1ull << gs[j]);
     }
     return index * 2u + static_cast<uint64_t>(stm_bit ? 1u : 0u);
 }
