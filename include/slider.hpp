@@ -22,12 +22,19 @@
 
 #pragma once
 
+#include "slider_device.hpp"
 #include "types.hpp"
 
 namespace slider {
 
 // Build the magic tables. Idempotent; safe to call more than once.
 void init();
+
+// Fill `out` with pointers to the internal magic entries + attack tables, for
+// uploading to the GPU (see slider_device.hpp). init() must have run first. The
+// pointers alias slider.cpp's static storage (stable for the process lifetime),
+// so the caller copies from them to device memory and rebinds.
+void get_device_sliders(DeviceSliders& out);
 
 // Reference ray-walking attacks (the oracle). sq is a 0..63 square index.
 // `occ` is the full board occupancy; blockers stop the ray (inclusive).

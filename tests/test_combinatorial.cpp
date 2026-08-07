@@ -114,6 +114,17 @@ int main() {
     };
     for (auto c : cases) test_pair(c.n, c.k);
 
+    // Safety cap: unrank of an OUT-OF-RANGE rank must TERMINATE (not spin on the
+    // GPU) and stay within [0, kMaxN). If this test hangs, the bound in
+    // unrank_combination regressed. We only assert boundedness; the output for a
+    // bad rank is meaningfully garbage, but it must be safe garbage.
+    for (int k = 1; k <= 6; ++k) {
+        int out[8];
+        combo::unrank_combination(~0ull, k, out);  // rank far past any C(n,k)
+        for (int i = 0; i < k; ++i)
+            if (out[i] < 0 || out[i] >= combo::kMaxN) { fail("unrank exceeded kMaxN on bad rank"); break; }
+    }
+
     if (g_failures == 0) {
         std::printf("All combinatorial (rank/unrank) tests passed.\n");
         return 0;

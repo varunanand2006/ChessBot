@@ -14,6 +14,8 @@
 
 #include <cstdint>
 
+#include "cuda_compat.hpp"  // CH_HD — these helpers are called from device code.
+
 using Bitboard = uint64_t;
 
 // ---------------------------------------------------------------------------
@@ -25,12 +27,12 @@ enum class Color : uint8_t {
     None  = 2,
 };
 
-constexpr Color operator~(Color c) {
+CH_HD constexpr Color operator~(Color c) {
     // Flip side to move. Valid only for White/Black.
     return static_cast<Color>(static_cast<uint8_t>(c) ^ 1u);
 }
 
-constexpr int color_index(Color c) { return static_cast<int>(c); }
+CH_HD constexpr int color_index(Color c) { return static_cast<int>(c); }
 
 // ---------------------------------------------------------------------------
 // Piece type (color-agnostic). Ordering matches conventional piece values and
@@ -47,7 +49,7 @@ enum class PieceType : uint8_t {
 };
 
 constexpr int NUM_PIECE_TYPES = 6;
-constexpr int type_index(PieceType pt) { return static_cast<int>(pt); }
+CH_HD constexpr int type_index(PieceType pt) { return static_cast<int>(pt); }
 
 // ---------------------------------------------------------------------------
 // Square (LERF). 64 real squares plus a None sentinel (e.g. no en-passant).
@@ -66,17 +68,17 @@ enum class Square : uint8_t {
 
 constexpr int NUM_SQUARES = 64;
 
-constexpr int sq_index(Square s) { return static_cast<int>(s); }
+CH_HD constexpr int sq_index(Square s) { return static_cast<int>(s); }
 
-constexpr Square make_square(int file, int rank) {
+CH_HD constexpr Square make_square(int file, int rank) {
     return static_cast<Square>(rank * 8 + file);
 }
 
-constexpr int file_of(Square s) { return sq_index(s) & 7; }
-constexpr int rank_of(Square s) { return sq_index(s) >> 3; }
+CH_HD constexpr int file_of(Square s) { return sq_index(s) & 7; }
+CH_HD constexpr int rank_of(Square s) { return sq_index(s) >> 3; }
 
 // Single-bit bitboard for a square.
-constexpr Bitboard square_bb(Square s) {
+CH_HD constexpr Bitboard square_bb(Square s) {
     return Bitboard{1} << sq_index(s);
 }
 

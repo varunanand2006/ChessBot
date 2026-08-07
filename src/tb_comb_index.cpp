@@ -186,6 +186,27 @@ void CombIndex::decode(std::size_t index, int* squares, Color* stm) const {
     *stm = stm_bit ? Color::Black : Color::White;
 }
 
+void CombIndex::fill_device(DeviceKingTable& kt, DeviceMaterial& mat) const {
+    kt.id             = kings_.id_data();
+    kt.transform      = kings_.transform_data();
+    kt.canon_pair     = kings_.canon_pair_data();
+    kt.num_canonical  = kings_.count();
+
+    mat.men        = men_;
+    mat.num_groups = static_cast<int>(groups_.size());
+    // groups_ never exceeds kMaxGroup (<=6) — #groups <= #extras <= 6 — which is
+    // exactly DeviceMaterial::groups capacity, so this copy can't overflow.
+    for (int gi = 0; gi < mat.num_groups; ++gi) {
+        const Group& g = groups_[static_cast<std::size_t>(gi)];
+        mat.groups[gi].count = g.count;
+        mat.groups[gi].R     = g.R;
+        mat.groups[gi].radix = g.radix;
+        mat.groups[gi].color = color_index(g.color);
+        mat.groups[gi].type  = type_index(g.type);
+        for (int j = 0; j < g.count; ++j) mat.groups[gi].slots[j] = g.slots[j];
+    }
+}
+
 Position CombIndex::make_position(const int* squares, Color stm, bool with_zobrist) const {
     Position pos;
     pos.clear();

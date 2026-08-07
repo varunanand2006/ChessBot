@@ -199,4 +199,25 @@ Bitboard queen_attacks(Square s, Bitboard occ) {
     return rook_attacks(s, occ) | bishop_attacks(s, occ);
 }
 
+void get_device_sliders(DeviceSliders& out) {
+    if (!g_initialized) init();
+    // Process-lifetime storage the returned pointers alias. Converting each
+    // internal Magic (which holds an absolute pointer into the shared table) to
+    // a self-contained {offset} form so it survives a memcpy to the device.
+    static DeviceMagic rook_dev[64];
+    static DeviceMagic bishop_dev[64];
+    for (int sq = 0; sq < 64; ++sq) {
+        rook_dev[sq]   = {ROOK[sq].mask,   ROOK[sq].magic,
+                          static_cast<int>(ROOK[sq].attacks - ROOK_TABLE),   ROOK[sq].shift};
+        bishop_dev[sq] = {BISHOP[sq].mask, BISHOP[sq].magic,
+                          static_cast<int>(BISHOP[sq].attacks - BISHOP_TABLE), BISHOP[sq].shift};
+    }
+    out.rook              = rook_dev;
+    out.bishop            = bishop_dev;
+    out.rook_table        = ROOK_TABLE;
+    out.bishop_table      = BISHOP_TABLE;
+    out.rook_table_size   = ROOK_TABLE_SIZE;
+    out.bishop_table_size = BISHOP_TABLE_SIZE;
+}
+
 }  // namespace slider
