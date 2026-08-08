@@ -28,6 +28,57 @@ each optimization re-gated bit-exact vs `solve_sweep_comb`:
   256 B/thread stack array's occupancy cost + the O(ne) coord scans dominated.
   Measurement beat the priority order — as intended.
 
+### Phase 5 — the optimized sweep at full 5-man scale — ALL 28 distinct materials (2026-08-07/08)
+
+The same kernel run on the real target: **every distinct-piece pawnless 5-man
+material — 28 in all, 209,674,080 comb positions each, on the RTX 4090.** Each was
+solved then checked against the Lichess (Gaviota DTM) API. **28/28 materials pass;
+896/896 sample positions match; zero mismatches.** Depth mate-in-5 → mate-in-107.
+
+| material | mate-in | passes | solve (s) | Lichess |
+|---|---:|---:|---:|:---:|
+| KBN vs KN | **107** | 154 | 68.6 | 32/32 |
+| KRB vs KQ | 70 | 91 | 60.8 | 32/32 |
+| KRN vs KQ | 69 | 97 | 63.9 | 32/32 |
+| KQR vs KQ | 67 | 123 | 84.8 | 32/32 |
+| KRB vs KR | 65 | 118 | 64.7 | 32/32 |
+| KBN vs KQ | 53 | 91 | 59.7 | 32/32 |
+| KQN vs KQ | 41 | 71 | 46.1 | 32/32 |
+| KQN vs KR | 41 | 55 | 33.1 | 32/32 |
+| KRN vs KR | 41 | 66 | 34.5 | 32/32 |
+| KBN vs KR | 41 | 26 | 13.4 | 32/32 |
+| KQR vs KN | 40 | 19 | 11.7 | 32/32 |
+| KQB vs KR | 40 | 41 | 25.2 | 32/32 |
+| KRB vs KN | 40 | 53 | 28.9 | 32/32 |
+| KBN vs KB | 39 | 36 | 16.9 | 32/32 |
+| KRN vs KN | 37 | 61 | 29.9 | 32/32 |
+| KQR vs KR | 34 | 37 | 22.6 | 32/32 |
+| KQB vs KQ | 33 | 61 | 40.6 | 32/32 |
+| KRN vs KB | 31 | 55 | 28.7 | 32/32 |
+| KRB vs KB | 30 | 55 | 29.0 | 32/32 |
+| KRBN vs K | 29 | 23 | 12.7 | 32/32 |
+| KQR vs KB | 29 | 21 | 12.9 | 32/32 |
+| KQB vs KN | 21 | 23 | 13.7 | 32/32 |
+| KQN vs KN | 21 | 27 | 15.0 | 32/32 |
+| KQB vs KB | 17 | 25 | 14.6 | 32/32 |
+| KQN vs KB | 17 | 29 | 16.9 | 32/32 |
+| KQBN vs K | 7 | 15 | 9.8 | 32/32 |
+| KQRB vs K | 5 | 11 | 7.3 | 32/32 |
+| KQRN vs K | 5 | 11 | 7.2 | 32/32 |
+
+- **Total GPU solve time 873 s** (~14.5 min) for all 28. Solve time tracks mate
+  depth (Jacobi pass count), not table size — every material is the same
+  209,674,080 positions. Deepest **KBN vs KN mate-in-107 (213 plies)** is among the
+  deepest pawnless 5-man endings known; matched to Gaviota exactly.
+- **Validated vs the Lichess (Gaviota DTM) API** — category + signed DTM on a
+  30-position spread + each table's two deepest mates. The full memoryless CPU
+  oracle (~15–20 h *per material*) is not run; correctness rests on the bit-exact
+  ≤4-man device gates (same kernels, larger N) + this external sample oracle.
+- Per-material throughput ≈ 315–395 Mpos/s (holds at 60× the KQKR positions). Host
+  setup ~96 s/material (classify 209M + three ≤4-man capture sub-tables via the
+  dense-solve-then-remap `solve_sub_comb`, not the ~10-min-each memoryless solver).
+  Device footprint ≈ 1.07 GB (two 419 MB int16 buffers + 209 MB state).
+
 ### nsys breakdown (no HW counters needed — this part works on RunPod)
 
 - `k_sweep_pass` = **100% of GPU time** (577.9 ms / 65 launches, 8.89 ms/pass,

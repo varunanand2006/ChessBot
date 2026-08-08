@@ -81,7 +81,9 @@ indexer tests, eval-table regeneration) lives in `CLAUDE.md`.
 - **5-man combinatorial indexer complete** — a mixed-radix `CombIndex`
   (combinatorial number system + a 462-config king-anchored symmetry table) plus a
   memoryless GPU-shaped sweep, all validated bit-exact against the dense oracle.
-  The *full* 5-man solve is deferred to the GPU by design (its stated purpose).
+  The *full* 5-man solve runs on the GPU by design (its stated purpose): **all 28
+  distinct-piece pawnless 5-man materials, 209,674,080 positions each, 28/28 vs
+  Lichess (deepest KBN vs KN = mate-in-107)** — see the CUDA section.
 - **Tablebase probing in search** returns exact WDL+DTM cutoffs: node reductions
   of ~10,900× (KRK d12), ~19,900× (KQK d12), ~18,500× (KQKR d10) vs the heuristic.
 - **Externally verified:** 133/133 sampled positions match the Lichess (Gaviota
@@ -102,7 +104,7 @@ optimization log: **[`cuda/PROFILING.md`](cuda/PROFILING.md)**.
 | 2 · Movegen + make/unmake | magic sliders + legal movegen device-side | host == reference over 980,664 perft nodes ✅ | sliders 524,288 cases + movegen ✅ |
 | 3 · Sweep kernel | one thread/position, Jacobi ping-pong to fixpoint | host sweep == `solve_sweep_comb` (KRK/KQK) ✅ | **KQKR all 3,494,568, mate-in-35, bit-exact** ✅ |
 | 4 · Profile + optimize | nsys breakdown + 3 measured optimizations | host-gated after each ✅ | **17.2× kernel speedup** (below) ✅ |
-| 5 · Scale | solve a real 5-man to completion | — | future work |
+| 5 · Scale | solve real **5-man** tables to completion | host setup + subs gated ✅ | **all 28 distinct-piece materials, 209,674,080 positions each, 28/28 vs Lichess** ✅ |
 
 #### Results — solving KQKR (KQ vs KR, a **4-piece** endgame; all 3,494,568 positions, to mate-in-35)
 
@@ -132,6 +134,46 @@ Optimization ladder on the RTX 4090, each step re-gated bit-exact vs the CPU ora
 - The first real `nvcc` build surfaced **5 device-portability bugs invisible to
   every host gate** (4× host-table ODR-uses + a slider-init segfault) — the payoff
   of building on the actual GPU.
+
+#### Phase 5 — every distinct-piece pawnless 5-man table (28 materials) on the GPU
+
+The optimized sweep run at full 5-man scale on the RTX 4090 — the phase the whole
+GPU port was built for. Each material is **209,674,080 comb positions** (~419 MB
+int16); each was solved and then checked against the Lichess (Gaviota DTM) API.
+
+**All 28 distinct-piece pawnless 5-man materials solved and verified — 28/28
+materials, 896/896 sample positions match Lichess, zero mismatches.** Depth ranges
+from mate-in-5 (three heavy pieces vs a lone king) to **mate-in-107 (KBN vs KN)**,
+one of the deepest pawnless 5-man endings known. Total GPU solve time 873 s.
+
+| material | mate-in | passes | solve (s) | Lichess |
+|---|---:|---:|---:|:---:|
+| KBN vs KN | **107** | 154 | 68.6 | 32/32 |
+| KRB vs KQ | 70 | 91 | 60.8 | 32/32 |
+| KRN vs KQ | 69 | 97 | 63.9 | 32/32 |
+| KQR vs KQ | 67 | 123 | 84.8 | 32/32 |
+| KRB vs KR | 65 | 118 | 64.7 | 32/32 |
+| KBN vs KQ | 53 | 91 | 59.7 | 32/32 |
+| KQN vs KQ | 41 | 71 | 46.1 | 32/32 |
+| KBN vs KR | 41 | 26 | 13.4 | 32/32 |
+| KQR vs KN | 40 | 19 | 11.7 | 32/32 |
+| KQR vs KR | 34 | 37 | 22.6 | 32/32 |
+| … 18 more (KQN·KRN·KQB·KRB variants, KQRB/KQRN/KQBN/KRBN vs K) | 5–41 | 11–66 | 7–41 | 32/32 |
+
+- **Why sampled verification, not a full oracle:** the memoryless CPU oracle over
+  ~210M positions is ~15–20 h *per material*, so it is not run at 5-man. Correctness
+  rests on (a) every device stage being bit-exact-gated at ≤4-man (the *same*
+  kernels, just larger *N*) and (b) an independent external oracle (Lichess/Gaviota)
+  on a per-material sample including each table's two deepest mates.
+- Solve time tracks mate depth (more Jacobi passes for deeper mates), not table
+  size — every table is the same 209,674,080 positions. Host setup per material
+  (classify 209M + three ≤4-man capture sub-tables via a dense-solve-then-remap
+  step, not the ~10-min-each memoryless solver) is ~96 s; device footprint ≈ 1.07 GB
+  of the 24 GB.
+- The tables are generated, verified, and freed — **not persisted**. Wiring a
+  GPU-generated 5-man into the engine's probe path (a disk format + loader) is the
+  natural next step; identical-piece materials (KRR vs K, …) additionally need
+  count-based capture detection in the solver.
 
 ## Repo layout
 

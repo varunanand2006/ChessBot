@@ -162,9 +162,16 @@ recomputes all live nodes). `int empty[64]`→bitmask DONE; work-list is future.
 - **Gate:** GPU KQKR wall time + achieved DRAM bandwidth (% peak) vs the CPU
   baseline (~10.5 min single-thread memoryless). Absolute numbers only.
 
-**Phase 5 — Scale**
-Solve a real 5-man to completion; report positions/sec + bandwidth vs the
-~10.5-min KQKR single-thread CPU baseline.
+**Phase 5 — Scale — DONE (2026-08-07/08, RTX 4090)**
+Solved **all 28 distinct-piece pawnless 5-man materials** to completion —
+209,674,080 comb positions each, **28/28 verified vs the Lichess (Gaviota DTM) API
+(896/896 sample positions, zero mismatches)**. Depth mate-in-5 → **mate-in-107 (KBN
+vs KN)**; total GPU solve 873 s. The full memoryless CPU oracle (~15–20 h per
+material) is skipped at 5-man in favour of the bit-exact ≤4-man device gates (same
+kernels) + an external sample oracle; capture sub-tables build in seconds via
+`solve_sub_comb` (dense solve + comb-key remap). Full per-material table:
+PROFILING.md. Next: persist a GPU 5-man to disk + a `tb_probe` loader so the engine
+can actually use it; identical-piece materials need count-based capture detection.
 
 ---
 

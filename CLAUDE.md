@@ -297,13 +297,49 @@ Full numbers: `cuda/PROFILING.md`; status matrix: `cuda/ROADMAP.md`.
   4× `CH_HD` functions ODR-using host tables (D4, binom, attack tables,
   CASTLE_MASK) + a slider-init-ordering segfault in `sweep_check.cu`. All on master.
 
+### Phase 5 (real 5-man tables on the GPU) — DONE (2026-08-07/08, RTX 4090)
+
+**All 28 distinct-piece pawnless 5-man materials solved on the GPU and verified
+28/28 vs the Lichess (Gaviota DTM) API — 896/896 sample positions, zero
+mismatches.** Each material is 209,674,080 comb positions (~419 MB int16). The
+phase the whole port was built for. Files: `include/tb_material.hpp` (shared
+parser), the 5-man branch in `cuda/sweep_check.cu`, `solve_sub_comb` in
+`src/tb_sweep_setup.cpp`, `--csv` mode in `python/verify_tablebase.py`.
+
+- **The 28 = every distinct (color,type) split of 3 extras from {Q,R,B,N}:** 4 with
+  a bare king (KQRB/KQRN/KQBN/KRBN vs K) + 24 two-vs-one (6 white pairs × 4 black
+  singles). Duplicate-piece materials (KRR vs K, …) are the *other* 32 — excluded,
+  they need count-based capture detection (below).
+- **Depth range mate-in-5 → mate-in-107**; deepest is **KBN vs KN (mate-in-107, 213
+  plies)**, one of the deepest pawnless 5-man endings known — matched to Gaviota
+  exactly. Other deep ones: KRB vs KQ m-70, KRN vs KQ m-69, KQR vs KQ m-67, KRB vs
+  KR m-65. Total GPU solve 873 s (per-material 7–85 s; time tracks mate depth /
+  Jacobi pass count, not table size — all are the same 209,674,080 positions).
+- **KQRKR reference (first, most-detailed):** 37 passes, 22.6 s (342.8 Mpos/s),
+  mate-in-34; WDL over 137,822,162 legal W 54,526,515 / L 68,502,216 / D 14,793,431;
+  device footprint ≈ 1.07 GB of 24 GB. Full per-material table: `cuda/PROFILING.md`.
+- **Verification without a full CPU oracle:** the memoryless CPU oracle over ~210M
+  positions is ~15–20 h *per material*, so the harness does NOT run it at 5-man.
+  Instead: (a) every device stage is bit-exact-gated at ≤4-man (same kernels, larger
+  N), and (b) the harness dumps sample positions (fen,category,signed_dtm, incl.
+  each table's two deepest mates) checked against Lichess.
+- **Fast capture sub-tables** (`solve_sub_comb`): a 5-man's three ≤4-man capture
+  boundaries are built by the DENSE `solve_sweep` + a remap to comb keys (~seconds)
+  instead of the ~10-min-each memoryless `solve_sweep_comb` — sound because
+  comb-sweep == dense-sweep on every legal position (`test_tb_comb_solve`). Gated:
+  KQKR host reference still bit-exact (mate-in-35) with the fast subs.
+
 ### >>> PICK UP HERE <<<
 
-Phase 3+4 are done on the GPU. Remaining candidate steps:
-- **Phase 5 — scale to a real 5-man** (KQRKR etc.) on the GPU: needs count-based
-  capture detection for duplicate-piece groups in the solver, a host-RAM check
-  (int16 table ~210–420 MB; scale the movegen_check sampling stride), then verify
-  one 5-man vs the Lichess API.
+Phase 3+4+5 are done on the GPU. Remaining candidate steps:
+- **Persist + probe a GPU 5-man** (the real architectural gap): the 5-man table is
+  generated, verified, then FREED — nothing wires it into the engine. A disk format
+  + a `tb_probe` loader would let the search actually use a GPU-generated 5-man.
+- **Identical-piece 5-man:** all 28 DISTINCT-piece materials are done; the other 32
+  (KRR vs K, KBB vs KN, …) need count-based capture detection for duplicate-piece
+  groups in the solver (the CombIndex already indexes duplicates — only the SOLVER's
+  "which bitboard emptied"
+  capture detection is ambiguous for them).
 - **Frontier work-list** (the next real GPU optimization): every pass currently
   recomputes ALL live `SW_SOLVE` nodes even after they settle (uniform 8.89 ms/pass
   to the end). Re-process only nodes whose predecessors changed last pass — a
@@ -316,10 +352,9 @@ Phase 3+4 are done on the GPU. Remaining candidate steps:
   then verify one 5-man vs the Lichess API. Also needs: skip the unused
   compute_zobrist in the sweep decode; count-based capture detection for
   duplicate-piece 5-man (KRRKN etc.); RAM check (int16 table ~210–420 MB).
-- **Identical-piece / pawn coverage:** CombIndex already indexes duplicates
-  (KRRK gate passes); the SOLVER still needs count-based capture detection for
-  them. Pawns reduce symmetry to 2-fold (left-right mirror only) + need
-  promotion/capture DAG edges — a separate indexer variant.
+- **Pawn coverage:** pawns reduce symmetry to 2-fold (left-right mirror only) and
+  need promotion/capture DAG edges — a separate indexer variant (the current
+  indexer is pawnless / full 8-fold D4).
 
 ---
 
