@@ -6,6 +6,11 @@ documented in **[The origin — Python engine](#the-origin--python-engine)** bel
 search, a Texel-tuned evaluation), plus a **CUDA** component that generates
 endgame tablebases by GPU retrograde analysis.
 
+**Headline result:** the GPU solver generated **every distinct-piece pawnless
+5-man endgame tablebase — all 28 materials, 209,674,080 positions each — verified
+28/28 against the Lichess (Gaviota DTM) tablebase**, with forced mates as deep as
+**mate-in-107 (KBN vs KN)**, one of the deepest pawnless 5-man endings known.
+
 This is a portfolio project targeting GPU/systems roles. Two rules shape every
 commit: **measurable, absolute performance numbers are first-class deliverables**
 (reported as NPS / positions·s⁻¹ / GB·s⁻¹ — never % speedups), and **every
@@ -72,7 +77,7 @@ indexer tests, eval-table regeneration) lives in `CLAUDE.md`.
   (2²² direct-mapped), quiescence with delta pruning, MVV-LVA + TT move ordering,
   a faithful port of the Python search. Absolute NPS, never % speedup.
 
-### Endgame tablebases (CPU) — 3-man + 4-man solved, 5-man indexed ✅
+### Endgame tablebases — 3-man + 4-man on CPU, all 28 distinct 5-man on GPU ✅
 
 - **Retrograde DTM solver, two independent implementations** (iterated sweep +
   min-priority-queue BFS) that must agree. 3-man theory (KQK mate-in-10, KRK
@@ -86,10 +91,12 @@ indexer tests, eval-table regeneration) lives in `CLAUDE.md`.
   Lichess (deepest KBN vs KN = mate-in-107)** — see the CUDA section.
 - **Tablebase probing in search** returns exact WDL+DTM cutoffs: node reductions
   of ~10,900× (KRK d12), ~19,900× (KQK d12), ~18,500× (KQKR d10) vs the heuristic.
-- **Externally verified:** 133/133 sampled positions match the Lichess (Gaviota
-  DTM) API on category and signed distance-to-mate across KQK/KRK/KBK/KQKR/KRKN.
+- **Externally verified vs the Lichess (Gaviota DTM) API** — exact category and
+  signed distance-to-mate: 133/133 across ≤4-man (KQK/KRK/KBK/KQKR/KRKN) **plus
+  896/896 across all 28 distinct-piece 5-man materials** (32 samples each, incl.
+  every table's two deepest mates).
 
-### CUDA port — Phases 0–4 validated on a real GPU (RTX 4090), bit-exact ✅
+### CUDA port — Phases 0–5 validated on a real GPU (RTX 4090), bit-exact ✅
 
 The whole port is written so the *device-shaped* code compiles and runs **on the
 host** (a `CH_HD` = `__host__ __device__` macro, empty off-nvcc), letting each
@@ -106,11 +113,14 @@ optimization log: **[`cuda/PROFILING.md`](cuda/PROFILING.md)**.
 | 4 · Profile + optimize | nsys breakdown + 3 measured optimizations | host-gated after each ✅ | **17.2× kernel speedup** (below) ✅ |
 | 5 · Scale | solve real **5-man** tables to completion | host setup + subs gated ✅ | **all 28 distinct-piece materials, 209,674,080 positions each, 28/28 vs Lichess** ✅ |
 
-#### Results — solving KQKR (KQ vs KR, a **4-piece** endgame; all 3,494,568 positions, to mate-in-35)
+#### Kernel optimization — measured on the 4-man KQKR gate (all 3,494,568 positions, mate-in-35)
 
-One CUDA thread per position — **~3.5M threads across ~27,300 blocks**, re-launched
-each of the **65 Jacobi passes** to convergence (~227M thread-executions total).
-Optimization ladder on the RTX 4090, each step re-gated bit-exact vs the CPU oracle:
+The kernel was tuned on KQKR because it is the largest material with an affordable
+bit-exact CPU oracle — every optimization is re-gated exact before it is trusted,
+then the *same* kernel is what solves the 28 five-man tables (next section). One
+CUDA thread per position — **~3.5M threads across ~27,300 blocks**, re-launched
+each of the **65 Jacobi passes** to convergence. Optimization ladder on the RTX
+4090:
 
 | Kernel | Time | Mpos/s | vs naive |
 |---|---:|---:|---:|
