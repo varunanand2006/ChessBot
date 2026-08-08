@@ -1,6 +1,6 @@
 # Chess Engine — C++/CUDA rewrite
 
-A ~1600-ELO chess engine — originally written from scratch in Python (fully
+A ~2000-ELO chess engine — originally written from scratch in Python (fully
 documented in **[The origin — Python engine](#the-origin--python-engine)** below)
 — rewritten in data-oriented **C++20** (bitboard move generation, alpha-beta
 search, a Texel-tuned evaluation), plus a **CUDA** component that generates
