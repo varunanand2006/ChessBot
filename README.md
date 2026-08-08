@@ -9,7 +9,9 @@ endgame tablebases by GPU retrograde analysis.
 **Headline result:** the GPU solver generated **every distinct-piece pawnless
 5-man endgame tablebase — all 28 materials, 209,674,080 positions each — verified
 28/28 against the Lichess (Gaviota DTM) tablebase**, with forced mates as deep as
-**mate-in-107 (KBN vs KN)**, one of the deepest pawnless 5-man endings known.
+**mate-in-107 (KBN vs KN)**, one of the deepest pawnless 5-man endings known. The
+flashy numbers and the interesting endgame truths that fell out (which material
+edges actually win vs. hold a fortress) are collected in **[FINDINGS.md](FINDINGS.md)**.
 
 This is a portfolio project targeting GPU/systems roles. Two rules shape every
 commit: **measurable, absolute performance numbers are first-class deliverables**
