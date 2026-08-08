@@ -25,6 +25,40 @@ void require_distinct(const std::vector<Piece>& extras) {
             }
 }
 
+// Comb-keyed capture-exit sub-table, built FAST: solve the sub-material with the
+// dense materialized solver (solve_sweep — its forward graph is affordable at
+// <=4 men, ~seconds) then remap the dense DTM onto comb keys.
+//
+// WHY not solve_sweep_comb here: that memoryless comb solver regenerates every
+// move each pass (the GPU-shape CPU baseline), so it is ~100x slower — ~10 min
+// per 4-man sub. A 5-man has THREE 4-man subs, i.e. ~30 min of pure host setup
+// (idle GPU time on a rented box) before the device sweep can even start. Since
+// the sweep only READS these sub-tables as fixed capture boundaries, any solver
+// that yields the correct comb-keyed DTM is interchangeable — pick the fast one.
+//
+// WHY it is bit-identical to solve_sweep_comb: comb-sweep value == dense-sweep
+// value for every legal position is already gated exhaustively
+// (test_tb_comb_solve). DTM is position-intrinsic, so keying the dense result by
+// comb index reproduces solve_sweep_comb exactly. A sub of an <=5-man material is
+// <=4-man, so the dense Index (which requires <=4 men) always applies. Illegal
+// comb indices stay pinned 0 and are never probed (a legal capture lands on a
+// legal position, which encodes to a legal comb index).
+std::vector<int16_t> solve_sub_comb(const std::vector<Piece>& rem) {
+    Index dense(rem);
+    Table dt = solve_sweep(dense);   // dense-keyed DTM (material-DAG handled)
+
+    CombIndex comb(rem);
+    std::vector<int16_t> value(comb.size(), 0);
+    int   sq[CombIndex::kMaxMen];
+    Color stm;
+    for (std::size_t i = 0; i < comb.size(); ++i) {
+        comb.decode(i, sq, &stm);
+        if (!Index::legal(rem, sq, stm)) continue;  // illegal comb index -> stays 0
+        value[i] = dt.value[dense.encode_squares(sq, stm)];
+    }
+    return value;
+}
+
 }  // namespace
 
 SweepSetup build_sweep_setup(const CombIndex& idx) {
@@ -60,8 +94,10 @@ SweepSetup build_sweep_setup(const CombIndex& idx) {
 
     // --- Capture-exit sub-tables, one per group ----------------------------
     // Group g's piece is (color,type) from the device descriptor; the sub is the
-    // material with that one piece removed. Solved with solve_sweep_comb so the
-    // values are comb-keyed (== dense DTM, per test_tb_comb_solve).
+    // material with that one piece removed. Solved by solve_sub_comb (fast dense
+    // solve + comb-key remap) so the values are comb-keyed (== dense DTM, per
+    // test_tb_comb_solve) — see the helper's note for why this replaced the
+    // ~10-min-per-sub memoryless solve_sweep_comb.
     s.subs.resize(static_cast<std::size_t>(s.mat.num_groups));
     for (int g = 0; g < s.mat.num_groups; ++g) {
         const Color     gc = static_cast<Color>(s.mat.groups[g].color);
@@ -79,8 +115,7 @@ SweepSetup build_sweep_setup(const CombIndex& idx) {
             sub.draw = 1;  // capture reaches bare KK
         } else {
             CombIndex sub_idx(rem);
-            Table t = solve_sweep_comb(sub_idx);
-            sub.value = std::move(t.value);
+            sub.value = solve_sub_comb(rem);  // dense solve + remap to comb keys
             DeviceKingTable tmp_kt;  // discarded; sub encode uses the main kt
             sub_idx.fill_device(tmp_kt, sub.mat);
         }

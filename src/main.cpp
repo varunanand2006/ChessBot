@@ -21,6 +21,7 @@
 #include "search.hpp"
 #include "slider.hpp"
 #include "tb_index.hpp"
+#include "tb_material.hpp"
 #include "tb_solve.hpp"
 #include "types.hpp"
 
@@ -61,81 +62,15 @@ int run_perft(int argc, char** argv, bool divide) {
     return 0;
 }
 
-bool letter_to_type(char c, PieceType& pt) {
-    switch (std::toupper(static_cast<unsigned char>(c))) {
-        case 'Q': pt = PieceType::Queen;  return true;
-        case 'R': pt = PieceType::Rook;   return true;
-        case 'B': pt = PieceType::Bishop; return true;
-        case 'N': pt = PieceType::Knight; return true;
-        default: return false;
-    }
-}
-
-const char* type_letter(PieceType pt) {
-    switch (pt) {
-        case PieceType::Queen:  return "Q";
-        case PieceType::Rook:   return "R";
-        case PieceType::Bishop: return "B";
-        case PieceType::Knight: return "N";
-        default:                return "?";
-    }
-}
-
-// Parse a tablebase material argument into the extra-piece list.
-//   Legacy 3-man form: a single letter "Q|R|B|N" == KXK (a White piece).
-//   General form: a Nalimov material name "KQKR", "KRKN", "KQK", ... where the
-//   pieces before the second K are White's and those after are Black's.
-// Rejects materials this engine's indexer cannot yet handle (see comments).
-bool parse_material(const char* s, std::vector<tb::Piece>& extras, std::string& name) {
-    if (!s || s[0] == '\0') return false;
-
-    // Legacy single-letter KXK.
-    if (s[1] == '\0') {
-        PieceType pt;
-        if (!letter_to_type(s[0], pt)) return false;
-        extras.push_back({Color::White, pt});
-        name = std::string("K") + type_letter(pt) + "K";
-        return true;
-    }
-
-    std::string str(s);
-    for (char& c : str) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    if (str.size() < 3 || str[0] != 'K') return false;
-    const std::size_t k2 = str.find('K', 1);
-    if (k2 == std::string::npos) return false;
-    if (str.find('K', k2 + 1) != std::string::npos) return false;  // exactly two kings
-
-    for (std::size_t i = 1; i < k2; ++i) {
-        PieceType pt;
-        if (!letter_to_type(str[i], pt)) return false;
-        extras.push_back({Color::White, pt});
-    }
-    for (std::size_t i = k2 + 1; i < str.size(); ++i) {
-        PieceType pt;
-        if (!letter_to_type(str[i], pt)) return false;
-        extras.push_back({Color::Black, pt});
-    }
-    if (extras.empty() || extras.size() > 2) return false;  // 3- or 4-man only (direct index)
-
-    // Distinct (color,type) required: identical pieces need unordered indexing.
-    for (std::size_t a = 0; a < extras.size(); ++a)
-        for (std::size_t b = a + 1; b < extras.size(); ++b)
-            if (extras[a].color == extras[b].color && extras[a].type == extras[b].type) {
-                std::fprintf(stderr, "tb: identical-piece materials (e.g. KRRK) unsupported yet\n");
-                return false;
-            }
-
-    name = "K";
-    for (const tb::Piece& p : extras) if (p.color == Color::White) name += type_letter(p.type);
-    name += "K";
-    for (const tb::Piece& p : extras) if (p.color == Color::Black) name += type_letter(p.type);
-    return true;
-}
+// Material-name parsing (letter_to_type / type_letter / parse_material) lives in
+// tb_material.hpp so the CUDA solve/dump harness shares one parser. The dense
+// tb::Index tools below cap at 4 men (max_extras = 2); the comb harness passes a
+// larger cap for 5-man.
 
 int run_tb(int argc, char** argv) {
     std::vector<tb::Piece> extras;
     std::string name;
-    if (argc < 3 || !parse_material(argv[2], extras, name)) {
+    if (argc < 3 || !tb::parse_material(argv[2], extras, name)) {
         std::fprintf(stderr, "usage: chess tb <material>   e.g. Q, R, KQK, KQKR, KRKN\n");
         return 1;
     }
@@ -166,7 +101,7 @@ int run_tb(int argc, char** argv) {
 int run_tbdump(int argc, char** argv) {
     std::vector<tb::Piece> extras;
     std::string name;
-    if (argc < 3 || !parse_material(argv[2], extras, name)) {
+    if (argc < 3 || !tb::parse_material(argv[2], extras, name)) {
         std::fprintf(stderr, "usage: chess tbdump <material> [N]\n");
         return 1;
     }

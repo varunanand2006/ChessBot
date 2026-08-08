@@ -2,8 +2,11 @@
 //
 // This is the portfolio spine: the CPU solve_sweep_comb's per-node update, run
 // as a CUDA kernel one thread per position, iterated Jacobi (ping-pong buffers)
-// to a fixpoint. The final device table must be BIT-EXACT to solve_sweep_comb —
-// KQKR, all 2,467,122 legal positions, mate-in-35.
+// to a fixpoint. For <=4-man the final device table must be BIT-EXACT to
+// solve_sweep_comb (KQKR, all 2,467,122 legal positions, mate-in-35). For 5-man
+// the memoryless CPU oracle is ~15-20 h, so instead we report WDL/DTM stats and
+// dump sample positions for external (Lichess/Gaviota) verification — the same
+// device kernels, gated bit-exact at <=4-man, run at 5-man scale.
 //
 // The host builds the one-time data (classification + capture sub-tables, via
 // tb_sweep_setup) and uploads it; the device does every pass. Convergence is a
@@ -13,14 +16,18 @@
 //
 // Built only where a CUDA compiler exists.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <string>
 #include <vector>
 
+#include "position.hpp"        // to_fen for the 5-man sample dump
 #include "slider.hpp"
 #include "tb_comb_index.hpp"
+#include "tb_material.hpp"      // shared tb::parse_material (comb cap)
 #include "tb_solve.hpp"
 #include "tb_sweep_device.hpp"
 #include "tb_sweep_setup.hpp"
@@ -112,15 +119,19 @@ int main(int argc, char** argv) {
     // this harness must too.
     slider::init();
 
-    // Material: KQKR by default; `KRK`/`KQK` for a quick smoke run.
+    // Material: KQKR by default. Any distinct-piece pawnless material the
+    // combinatorial indexer handles — KRK/KQK (smoke), KQKR (the 4-man gate),
+    // KQRKR/KQRKN/... (5-man). Parsed by the shared tb::parse_material with the
+    // 6-extra comb cap. argv[2] optionally sets the sample count for the 5-man
+    // dump (default 40; unused by the <=4-man bit-exact gate).
     const std::string which = (argc > 1) ? argv[1] : "KQKR";
-    using PT = PieceType;
-    const Color W = Color::White, B = Color::Black;
+    const int n_samples = (argc > 2) ? std::max(1, std::atoi(argv[2])) : 40;
     std::vector<tb::Piece> extras;
-    if (which == "KRK")       extras = {{W, PT::Rook}};
-    else if (which == "KQK")  extras = {{W, PT::Queen}};
-    else if (which == "KQKR") extras = {{W, PT::Queen}, {B, PT::Rook}};
-    else { std::fprintf(stderr, "unknown material %s\n", which.c_str()); return 2; }
+    std::string name;
+    if (!tb::parse_material(which.c_str(), extras, name, /*max_extras=*/6)) {
+        std::fprintf(stderr, "unknown/unsupported material %s\n", which.c_str());
+        return 2;
+    }
 
     tb::CombIndex idx(extras);
     const uint64_t N = idx.size();
@@ -217,25 +228,94 @@ int main(int argc, char** argv) {
                 gb_per_s, peak_gb_s > 0 ? 100.0 * gb_per_s / peak_gb_s : 0.0, peak_gb_s);
     std::printf("  (run cuda/profile.sh for the true achieved DRAM bandwidth via Nsight)\n");
 
-    // --- Gate: bit-exact vs solve_sweep_comb -------------------------------
-    tb::Table oracle = tb::solve_sweep_comb(idx);
-    uint64_t diffs = 0, first = 0;
-    int max_win = 0;
-    for (uint64_t i = 0; i < N; ++i) {
-        if (got[i] != oracle.value[i]) { if (!diffs) first = i; ++diffs; }
-        if (got[i] > 0) { int d = tb::win_dtm(got[i]); if (d > max_win) max_win = d; }
+    // --- Verify ------------------------------------------------------------
+    // <=4-man: the CPU oracle (solve_sweep_comb) is affordable (~seconds to
+    // ~minutes), so gate the device table BIT-EXACT against it — the Phase 3
+    // correctness contract. 5-man: that same memoryless oracle over ~210M
+    // positions is ~15-20 h, so we do NOT run it. Every device stage underneath
+    // (index, sliders, movegen, comb-index, and the sweep kernel itself) is
+    // already gated bit-exact on <=4-man, so a 5-man run exercises the SAME
+    // kernels at larger N. The fitting check there is an INDEPENDENT external
+    // oracle on a sample: report WDL/DTM stats + dump sample positions
+    // (fen,category,signed_dtm) for python/verify_tablebase.py --csv (Lichess).
+    const bool have_oracle = (idx.men() <= 4);
+
+    if (have_oracle) {
+        tb::Table oracle = tb::solve_sweep_comb(idx);
+        uint64_t diffs = 0, first = 0;
+        int max_win = 0;
+        for (uint64_t i = 0; i < N; ++i) {
+            if (got[i] != oracle.value[i]) { if (!diffs) first = i; ++diffs; }
+            if (got[i] > 0) { int d = tb::win_dtm(got[i]); if (d > max_win) max_win = d; }
+        }
+        for (void* p : frees) cudaFree(p);
+        if (diffs == 0) {
+            std::printf("PASS: device sweep == solve_sweep_comb on all %llu positions "
+                        "(max win DTM=%d plies = mate-in-%d).\n",
+                        (unsigned long long)N, max_win, (max_win + 1) / 2);
+            return 0;
+        }
+        std::printf("FAIL: %llu / %llu differ (first at %llu: got=%d oracle=%d)\n",
+                    (unsigned long long)diffs, (unsigned long long)N,
+                    (unsigned long long)first, got[first], oracle.value[first]);
+        return 1;
     }
+
+    // --- 5-man: stats + sample dump (no full CPU oracle) -------------------
+    // WDL over LEGAL positions only (the comb space is intentionally loose;
+    // illegal indices are pinned and must not be counted). Track the deepest
+    // forced win/loss — the hardest positions, where bugs would hide — to both
+    // report and include in the dump.
+    uint64_t wins = 0, losses = 0, draws = 0;
+    int      max_win = 0, max_loss = 0;
+    uint64_t deepest_win = 0, deepest_loss = 0;
+    bool     have_win = false, have_loss = false;
+    for (uint64_t i = 0; i < N; ++i) {
+        if (setup.state[i] == tb::SW_ILLEGAL) continue;
+        const int16_t v = got[i];
+        if (v > 0) {
+            ++wins;
+            const int d = tb::win_dtm(v);
+            if (d > max_win) { max_win = d; deepest_win = i; have_win = true; }
+        } else if (v < 0) {
+            ++losses;
+            const int d = tb::loss_dtm(v);
+            if (d > max_loss) { max_loss = d; deepest_loss = i; have_loss = true; }
+        } else {
+            ++draws;
+        }
+    }
+
+    std::printf("\n%s (5-man): W=%llu L=%llu D=%llu (legal positions)\n",
+                name.c_str(), (unsigned long long)wins, (unsigned long long)losses,
+                (unsigned long long)draws);
+    std::printf("  deepest win: %d plies = mate-in-%d\n", max_win, (max_win + 1) / 2);
+
+    // Emit fen,category,signed_dtm for a spread of legal positions + the two
+    // deepest mates. signed_dtm = plies to mate, + if side-to-move wins, - if it
+    // is being mated, 0 draw (the Lichess/Gaviota convention verify reads).
+    const std::string csv_path = name + "_dump.csv";
+    std::ofstream csv(csv_path);
+    auto emit = [&](uint64_t i) {
+        if (setup.state[i] == tb::SW_ILLEGAL) return;
+        const int16_t v = got[i];
+        const char* cat = (v > 0) ? "win" : (v < 0) ? "loss" : "draw";
+        const int sdtm = (v > 0) ? tb::win_dtm(v) : (v < 0) ? -tb::loss_dtm(v) : 0;
+        csv << to_fen(idx.decode_pos(i)) << ',' << cat << ',' << sdtm << '\n';
+    };
+    // Spread picks skip illegal indices by scanning forward to the next legal one.
+    for (int k = 0; k < n_samples; ++k) {
+        uint64_t i = (uint64_t)k * N / (uint64_t)n_samples;
+        for (uint64_t j = 0; j < N && setup.state[i] == tb::SW_ILLEGAL; ++j)
+            i = (i + 1) % N;
+        emit(i);
+    }
+    if (have_win)  emit(deepest_win);
+    if (have_loss) emit(deepest_loss);
+    csv.close();
 
     for (void* p : frees) cudaFree(p);
-
-    if (diffs == 0) {
-        std::printf("PASS: device sweep == solve_sweep_comb on all %llu positions "
-                    "(max win DTM=%d plies = mate-in-%d).\n",
-                    (unsigned long long)N, max_win, (max_win + 1) / 2);
-        return 0;
-    }
-    std::printf("FAIL: %llu / %llu differ (first at %llu: got=%d oracle=%d)\n",
-                (unsigned long long)diffs, (unsigned long long)N,
-                (unsigned long long)first, got[first], oracle.value[first]);
-    return 1;
+    std::printf("  wrote %d+2 sample positions to %s\n", n_samples, csv_path.c_str());
+    std::printf("  verify: python python/verify_tablebase.py --csv %s\n", csv_path.c_str());
+    return 0;
 }
