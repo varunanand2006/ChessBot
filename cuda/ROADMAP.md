@@ -2,18 +2,18 @@
 
 **Goal:** run the endgame-tablebase retrograde sweep on the GPU. The kernel is the
 CPU `solve_sweep_comb` inner loop, parallelized one thread per position, iterated
-to convergence. Headline metric = **achieved memory bandwidth** (Nsight Compute),
+to convergence. Target metric = achieved memory bandwidth (Nsight Compute),
 since it's a bandwidth-bound dense sweep.
 
-**Guiding rule:** the CPU `CombIndex` + `solve_sweep_comb` is a **bit-exact
-oracle**. Every device step is diffed against it before moving on — never trust a
+**Guiding rule:** the CPU `CombIndex` + `solve_sweep_comb` is a bit-exact
+oracle. Every device step is diffed against it before moving on — never trust a
 device result that doesn't match the host.
 
 ---
 
 ## Phases (each has a gate that must pass before the next)
 
-**Phase 0 — Scaffold** *(local, no GPU)* — **BUILT (local half done; on-box gate pending a GPU)**
+**Phase 0 — Scaffold** *(local, no GPU)* — built (local half done; on-box gate pending a GPU)
 Create `/cuda`, add guarded CUDA to CMake (CPU-only build still works with no
 toolkit), a `CH_HD` macro (`__host__ __device__` under nvcc, empty otherwise) so
 shared headers compile for both, a hello-kernel + a device↔host equality harness.
@@ -38,66 +38,66 @@ shared headers compile for both, a hello-kernel + a device↔host equality harne
   Exit 0 / "PASS: host == device on all 1048576 values (CH_HD verified)" is the
   gate. On CMake <3.24 pass `-DCMAKE_CUDA_ARCHITECTURES=89` (RTX 4090 = sm_89).
 
-**Phase 1 — Index primitives** — **1a done (local); 1b written (on-box gate); 1c next**
+**Phase 1 — Index primitives** — 1a done (local); 1b written (on-box gate); 1c next
 Port `combinatorial` (binom → shrunk `__constant__`, rank/unrank as `CH_HD`), D4
 transforms, king table → device arrays.
 **Gate:** device decode/encode == host `CombIndex` on a batch of indices.
 
-- **1a — annotate primitives (DONE, locally gated).** `combinatorial.hpp`
+- **1a — annotate primitives** (done, locally gated). `combinatorial.hpp`
   (`binom`/`rank_combination`/`unrank_combination`) and `tb_symmetry.hpp`
   (`transform_square`) now carry `CH_HD`. Since `CH_HD` is empty on the host,
   the CPU build + all 17 fast tests pass unchanged — the local gate for "the
   annotation didn't perturb host code."
-- **1b — device primitives harness (WRITTEN; gate runs on the box).**
+- **1b — device primitives harness** (written; gate runs on the box).
   `cuda/index_check.cu` runs `binom` (whole 0..64 triangle), `rank`/`unrank`
-  round-trip over a grid of (n,k), and the D4 table on the DEVICE, diffing
+  round-trip over a grid of (n,k), and the D4 table on the device, diffing
   bit-exact against the host. ctest `cuda_index_check`. Compiles only where nvcc
   exists. Binom table + D4 stay constexpr namespace arrays for now; the
   `__constant__` shrink (checklist item 2) is a Phase 4 perf change, not needed
   for correctness.
-- **1c — device CombIndex (DONE local; device half on the box).** The device
+- **1c — device CombIndex** (done local; device half on the box). The device
   port artifact is `include/tb_comb_index_device.hpp`: POD `DeviceKingTable` /
   `DeviceMaterial` + CH_HD `comb_encode`/`comb_decode`, a line-for-line mirror of
   `CombIndex::encode`/`decode` with no std::vector / no position.hpp (lean device
   TU). `CombIndex::fill_device()` builds the descriptors from the KingTable's raw
   arrays (new `id_data()`/`transform_data()`/`canon_pair_data()` accessors).
-  - **Local gate (no GPU), PASSING:** `tests/test_tb_comb_index_device.cpp` runs
-    the CH_HD mirror on the HOST and diffs it against `CombIndex` in BOTH
-    directions. Exhaustive: KRK/KQK full + **all 3,494,568 KQKR** + **all
-    1,747,284 KRRK (duplicate pieces)** match exactly (`slow`, ~8s). ctest
+  - **Local gate (no GPU), passing:** `tests/test_tb_comb_index_device.cpp` runs
+    the CH_HD mirror on the host and diffs it against `CombIndex` in both
+    directions. Exhaustive: KRK/KQK full + all 3,494,568 KQKR + all
+    1,747,284 KRRK (duplicate pieces) match exactly (`slow`, ~8s). ctest
     `tb_comb_index_device` (fast: full 3-man + sampled 4-man).
   - **Device gate (on the box):** `cuda/comb_index_check.cu` uploads the
-    descriptors, runs the SAME functions in a kernel over the whole space, diffs
+    descriptors, runs the same functions in a kernel over the whole space, diffs
     device output vs host `CombIndex`. ctest `cuda_comb_index_check`. So
     host-mirror==CombIndex is proven on CPU and device==host-mirror is the only
     thing the GPU must confirm.
   - Kept the `int empty[64]` form (mirror host exactly for a clean diff); the
     bitmask+popcount rewrite (checklist item 1) is deferred to Phase 4.
 
-**Phase 2 — Move generation + make/unmake** — **DONE local; device half on the box**
+**Phase 2 — Move generation + make/unmake** — done local; device half on the box
 Magic sliders + attack tables → `__constant__`; `Position`/`MoveList` device-side.
 This is the largest, most divergent piece.
 **Gate:** device legal-move sets == host (device perft-style check).
 
-- **2a — sliders (DONE).** `include/slider_device.hpp`: POD `DeviceMagic`/
+- **2a — sliders** (done). `include/slider_device.hpp`: POD `DeviceMagic`/
   `DeviceSliders` + CH_HD `rook/bishop/queen_attacks_dev` (multiply-shift, the
   reason we chose magics over PEXT). Magic SEARCH stays on host;
   `slider::get_device_sliders()` exports the built tables for upload. Device gate
   `cuda/slider_check.cu` (device attacks == host over random occupancies).
-- **2b/2c — movegen + make/unmake (DONE local).** `include/movegen_device.hpp`:
+- **2b/2c — movegen + make/unmake** (done local). `include/movegen_device.hpp`:
   CH_HD mirror of movegen.cpp + position.cpp make/unmake, over `Position` +
-  `DeviceSliders`. Two deliberate diffs: **no Zobrist** (sweep reads only
+  `DeviceSliders`. Two deliberate diffs: no Zobrist (sweep reads only
   bitboards) and free helpers instead of capturing lambdas. Needed CH_HD on the
   small constexpr helpers in `types.hpp`/`move.hpp`/`attacks.hpp` + a device bit
   header `include/bitboard_device.hpp` (`__popcll`/`__ffsll` under `__CUDA_ARCH__`,
   `std::` on host). All empty on host → CPU build + 17 fast tests unchanged.
-  - **Local gate (no GPU), PASSING:** `tests/test_movegen_device.cpp` runs the
-    CH_HD generator on the HOST and diffs its legal set against
-    `movegen::generate_legal` at EVERY node of the standard perft trees
+  - **Local gate (no GPU), passing:** `tests/test_movegen_device.cpp` runs the
+    CH_HD generator on the host and diffs its legal set against
+    `movegen::generate_legal` at every node of the standard perft trees
     (startpos/Kiwipete/pos3/4/5 — castling, en passant, promotions) + a pawnless
-    KRKR endgame: **980,664 nodes, zero divergence** (`slow`; fast tier 37,504).
+    KRKR endgame: 980,664 nodes, zero divergence (`slow`; fast tier 37,504).
     ctest `movegen_device`.
-  - **Device gate (on the box):** `cuda/movegen_check.cu` runs the SAME generator
+  - **Device gate (on the box):** `cuda/movegen_check.cu` runs the same generator
     in a kernel over CombIndex-decoded positions (KRK/KQK full, KQKR sampled) and
     diffs an order-independent move-set signature vs host. ctest
     `cuda_movegen_check`.
@@ -105,26 +105,26 @@ This is the largest, most divergent piece.
   `__constant__`; `int empty[64]`→bitmask; block size / register pressure of the
   make→king-safety→unmake filter (the flagged divergence risk) — all Nsight-driven.
 
-**Phase 3 — The sweep kernel** — **DONE — validated on RTX 4090: KQKR all 3,494,568 positions bit-exact vs `solve_sweep_comb`, mate-in-35**
+**Phase 3 — The sweep kernel** — done, validated on RTX 4090: KQKR all 3,494,568 positions bit-exact vs `solve_sweep_comb`, mate-in-35
 Classify kernel (pass 0) + update kernel (one pass) + host driver loop with a
 global convergence flag; ping-pong `int16[N]` value buffers.
-**Gate:** final device table is **bit-exact** to `solve_sweep_comb` — KQKR, all
+**Gate:** final device table is bit-exact to `solve_sweep_comb` — KQKR, all
 2,467,122 positions, mate-in-35.
 
 - **Design realized:** classification (pass 0) + capture sub-tables are solved
-  ONCE on the host (`tb_sweep_setup.{hpp,cpp}`, mirroring solve_sweep_comb's pass
+  once on the host (`tb_sweep_setup.{hpp,cpp}`, mirroring solve_sweep_comb's pass
   0 + sub build) and uploaded; the device runs only the per-node update
   (`include/tb_sweep_device.hpp`, the CH_HD `sweep_update` = the kernel body).
-  Ping-pong **Jacobi** (not the CPU's in-place Gauss-Seidel) — same unique DTM
+  Ping-pong Jacobi (not the CPU's in-place Gauss-Seidel) — same unique DTM
   fixpoint, different pass count; global `changed` flag drives host convergence.
-  Capture sub-tables use the **CombIndex layout** (reuse `comb_encode`), not the
+  Capture sub-tables use the CombIndex layout (reuse `comb_encode`), not the
   dense Index — DTM is identical (test_tb_comb_solve), so no dense-indexer port.
-- **Local gate (no GPU), PASSING for 3-man:** `tests/test_tb_sweep_device.cpp`
-  runs the device update Jacobi-to-fixpoint on the HOST (`sweep_host_reference`)
+- **Local gate (no GPU), passing for 3-man:** `tests/test_tb_sweep_device.cpp`
+  runs the device update Jacobi-to-fixpoint on the host (`sweep_host_reference`)
   and diffs vs `solve_sweep_comb` at every index — KRK (57,288, 33 passes) and
-  KQK (57,288, 21 passes) EXACT. ctest `tb_sweep_device`. This is a real
+  KQK (57,288, 21 passes) exact. ctest `tb_sweep_device`. This is a real
   cross-check: Jacobi vs Gauss-Seidel, device movegen, comb-layout subs.
-  - **KQKR (4-man, the capture-VALUE path) is `slow`/manual** — host Jacobi over
+  - **KQKR (4-man, the capture-value path) is `slow`/manual** — host Jacobi over
     3.49M positions is ~tens of minutes (the reason the real run is the GPU);
     validated separately. KRK/KQK captures only exit to draws, so KQKR is what
     exercises non-draw capture sub-tables.
@@ -132,21 +132,21 @@ global convergence flag; ping-pong `int16[N]` value buffers.
   sweep kernel (one thread/position) + host convergence loop, diffed bit-exact vs
   `solve_sweep_comb`. Default KQKR (all 2,467,122, mate-in-35); KRK/KQK for a
   smoke run. Prints passes + wall time. ctest `cuda_sweep_check KRK` (fast); KQKR
-  run explicitly on the box. This is the headline kernel Phase 4 profiles.
+  run explicitly on the box. This is the kernel Phase 4 profiles.
 
-**Phase 4 — Profile + optimize** *(the portfolio meat)* — **DONE on RTX 4090: 17.2× kernel speedup, KQKR 9,872 → 575 ms, all steps bit-exact. Full numbers in `PROFILING.md`.**
+**Phase 4 — Profile + optimize** — done on RTX 4090: 17.2× kernel speedup, KQKR 9,872 → 575 ms, all steps bit-exact. Full numbers in `PROFILING.md`.
 Applied + measured (each re-gated bit-exact): (1) fuse legality filter → 1.05×;
 (3) O(1) small-k device binom → 3.23× cumulative; (2) `int empty[64]` → `uint64_t`
-bitmask → **17.2× cumulative** (5.3× from this alone — the biggest lever, opposite
-of the static-analysis priority order). **≈1,096× vs the CPU memoryless baseline
-(~630 s).** nsys: kernel is 100% of GPU time, still compute-bound on movegen (value
-BW ~2 GB/s of 1,008 peak). The true `dram__throughput` % was NOT captured —
+bitmask → 17.2× cumulative (5.3× from this alone — the biggest lever, opposite
+of the static-analysis priority order). ≈1,096× vs the CPU memoryless baseline
+(~630 s). nsys: kernel is 100% of GPU time, still compute-bound on movegen (value
+BW ~2 GB/s of 1,008 peak). The true `dram__throughput` % was not captured —
 RunPod locks `ncu` counters (`ERR_NVGPUCTRPERM`); needs a counter-enabled host.
 Remaining lever: a frontier work-list (skip settled nodes; every pass currently
-recomputes all live nodes). `int empty[64]`→bitmask DONE; work-list is future.
+recomputes all live nodes). `int empty[64]`→bitmask done; work-list is future.
 
-- **What was prepped locally (Phase 4 has no host-verifiable half — it's
-  measurement):** `cuda/sweep_check.cu` now reports the headline metric itself
+- **What was prepped locally** (Phase 4 has no host-verifiable half — it's
+  measurement): `cuda/sweep_check.cu` now reports the target metric itself
   (value-buffer bandwidth as a lower bound + % of the card's theoretical peak,
   positions/sec, ms/pass). `cuda/profile.sh` runs the harness self-report +
   targeted `ncu` metrics (dram %, occupancy, warp efficiency, regs/thread) + a
@@ -162,11 +162,11 @@ recomputes all live nodes). `int empty[64]`→bitmask DONE; work-list is future.
 - **Gate:** GPU KQKR wall time + achieved DRAM bandwidth (% peak) vs the CPU
   baseline (~10.5 min single-thread memoryless). Absolute numbers only.
 
-**Phase 5 — Scale — DONE (2026-08-07/08, RTX 4090)**
-Solved **all 28 distinct-piece pawnless 5-man materials** to completion —
-209,674,080 comb positions each, **28/28 verified vs the Lichess (Gaviota DTM) API
-(896/896 sample positions, zero mismatches)**. Depth mate-in-5 → **mate-in-107 (KBN
-vs KN)**; total GPU solve 873 s. The full memoryless CPU oracle (~15–20 h per
+**Phase 5 — Scale — done (2026-08-07/08, RTX 4090)**
+Solved all 28 distinct-piece pawnless 5-man materials to completion —
+209,674,080 comb positions each, 28/28 verified vs the Lichess (Gaviota DTM) API
+(896/896 sample positions, zero mismatches). Depth mate-in-5 to mate-in-107 (KBN
+vs KN); total GPU solve 873 s. The full memoryless CPU oracle (~15–20 h per
 material) is skipped at 5-man in favour of the bit-exact ≤4-man device gates (same
 kernels) + an external sample oracle; capture sub-tables build in seconds via
 `solve_sub_comb` (dense solve + comb-key remap). Full per-material table:

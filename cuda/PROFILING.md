@@ -1,15 +1,15 @@
 # Phase 4 — Profiling & optimization (GPU-only)
 
-Phase 4 is measurement-driven, so unlike Phases 0–3 it **cannot be done off the
-GPU**. This file is the plan: the metric that matters, how to read it, and the
-optimization candidates in priority order — each applied **only after** Nsight
+Phase 4 is measurement-driven, so unlike Phases 0–3 it cannot be done off the
+GPU. This file is the plan: the metric that matters, how to read it, and the
+optimization candidates in priority order — each applied only after Nsight
 confirms it's the bottleneck, then re-measured. The kernel stays bit-exact vs
 `solve_sweep_comb` after every change (`cuda_sweep_check` is the gate that rides
 along).
 
 ## Results — measured on an RTX 4090 (sm_89, CUDA 12.8), 2026-08-07
 
-Solving **KQKR** (all 3,494,568 comb positions, to mate-in-35), 65 Jacobi passes,
+Solving KQKR (all 3,494,568 comb positions, to mate-in-35), 65 Jacobi passes,
 each optimization re-gated bit-exact vs `solve_sweep_comb`:
 
 | Kernel (cumulative) | Time | ms/pass | Mpos/s | vs naive |
@@ -17,27 +17,27 @@ each optimization re-gated bit-exact vs `solve_sweep_comb`:
 | naive port | 9,872 ms | 151.9 | 23.0 | 1.0× |
 | + fuse legality filter into the sweep (#1) | 9,416 ms | 144.9 | 24.1 | 1.05× |
 | + O(1) small-k device binom (#3, arithmetic) | 3,057 ms | 47.0 | 74.3 | 3.23× |
-| + free-square bitmask, no `empty[64]` (#2) | **575 ms** | **8.85** | **394.8** | **17.2×** |
+| + free-square bitmask, no `empty[64]` (#2) | 575 ms | 8.85 | 394.8 | 17.2× |
 
-- vs CPU: **≈1,096×** faster than the same memoryless sweep on CPU (~630 s single-
-  thread), and **~9.4×** faster than the CPU's materialized solver (~5.4 s) at
+- vs CPU: ≈1,096× faster than the same memoryless sweep on CPU (~630 s single-
+  thread), and ~9.4× faster than the CPU's materialized solver (~5.4 s) at
   near-zero memory. (CPU is single-thread on a different host — impl-to-impl, not
   same-silicon.) KRK end-to-end: 53.9 → 7.1 ms.
-- **Surprise:** candidate #1 (the "biggest occupancy win" by static analysis) gave
-  only 1.05×; candidate #2 (`empty[64]`→bitmask, ranked *minor*) gave **5.3×**. The
-  256 B/thread stack array's occupancy cost + the O(ne) coord scans dominated.
-  Measurement beat the priority order — as intended.
+- The priority order was wrong: candidate #1 (the predicted "biggest occupancy
+  win" by static analysis) gave only 1.05×, while candidate #2 (`empty[64]`→bitmask,
+  ranked minor) gave 5.3×. The 256 B/thread stack array's occupancy cost and the
+  O(ne) coord scans dominated. Measurement, not static analysis, set the real order.
 
-### Phase 5 — the optimized sweep at full 5-man scale — ALL 28 distinct materials (2026-08-07/08)
+### Phase 5 — the optimized sweep at full 5-man scale, all 28 distinct materials (2026-08-07/08)
 
-The same kernel run on the real target: **every distinct-piece pawnless 5-man
-material — 28 in all, 209,674,080 comb positions each, on the RTX 4090.** Each was
-solved then checked against the Lichess (Gaviota DTM) API. **28/28 materials pass;
-896/896 sample positions match; zero mismatches.** Depth mate-in-5 → mate-in-107.
+The same kernel run on the real target: every distinct-piece pawnless 5-man
+material — 28 in all, 209,674,080 comb positions each, on the RTX 4090. Each was
+solved then checked against the Lichess (Gaviota DTM) API. 28/28 materials pass,
+896/896 sample positions match, zero mismatches. Depth mate-in-5 to mate-in-107.
 
 | material | mate-in | passes | solve (s) | Lichess |
 |---|---:|---:|---:|:---:|
-| KBN vs KN | **107** | 154 | 68.6 | 32/32 |
+| KBN vs KN | 107 | 154 | 68.6 | 32/32 |
 | KRB vs KQ | 70 | 91 | 60.8 | 32/32 |
 | KRN vs KQ | 69 | 97 | 63.9 | 32/32 |
 | KQR vs KQ | 67 | 123 | 84.8 | 32/32 |
@@ -66,13 +66,13 @@ solved then checked against the Lichess (Gaviota DTM) API. **28/28 materials pas
 | KQRB vs K | 5 | 11 | 7.3 | 32/32 |
 | KQRN vs K | 5 | 11 | 7.2 | 32/32 |
 
-- **Total GPU solve time 873 s** (~14.5 min) for all 28. Solve time tracks mate
+- Total GPU solve time 873 s (~14.5 min) for all 28. Solve time tracks mate
   depth (Jacobi pass count), not table size — every material is the same
-  209,674,080 positions. Deepest **KBN vs KN mate-in-107 (213 plies)** is among the
+  209,674,080 positions. Deepest is KBN vs KN mate-in-107 (213 plies), among the
   deepest pawnless 5-man endings known; matched to Gaviota exactly.
-- **Validated vs the Lichess (Gaviota DTM) API** — category + signed DTM on a
+- **Validated vs the Lichess (Gaviota DTM) API:** category + signed DTM on a
   30-position spread + each table's two deepest mates. The full memoryless CPU
-  oracle (~15–20 h *per material*) is not run; correctness rests on the bit-exact
+  oracle (~15–20 h per material) is not run; correctness rests on the bit-exact
   ≤4-man device gates (same kernels, larger N) + this external sample oracle.
 - Per-material throughput ≈ 315–395 Mpos/s (holds at 60× the KQKR positions). Host
   setup ~96 s/material (classify 209M + three ≤4-man capture sub-tables via the
@@ -81,31 +81,31 @@ solved then checked against the Lichess (Gaviota DTM) API. **28/28 materials pas
 
 ### nsys breakdown (no HW counters needed — this part works on RunPod)
 
-- `k_sweep_pass` = **100% of GPU time** (577.9 ms / 65 launches, 8.89 ms/pass,
-  ±2%). `cudaLaunchKernel` 2.7 ms total, `cudaMemset` 0.11 ms, GPU memcpy 1.8 ms —
-  **per-pass host/launch/copy/sync overhead is ~0.5%.** So "check convergence every
-  K passes" would save ~nothing; the kernel *is* the cost.
+- `k_sweep_pass` = 100% of GPU time (577.9 ms / 65 launches, 8.89 ms/pass,
+  ±2%). `cudaLaunchKernel` 2.7 ms total, `cudaMemset` 0.11 ms, GPU memcpy 1.8 ms,
+  so per-pass host/launch/copy/sync overhead is ~0.5%. "Check convergence every
+  K passes" would save ~nothing; the kernel is the cost.
 - Uniform 8.89 ms/pass even late in convergence ⇒ every pass recomputes all
   `SW_SOLVE` nodes regardless of whether they've settled. The remaining
-  algorithmic lever is a **frontier work-list** (re-process only nodes whose
+  algorithmic lever is a frontier work-list (re-process only nodes whose
   predecessors changed) — a redesign, not a tweak.
-- Still **compute-bound on movegen**: achieved value-buffer bandwidth ≈ 2 GB/s of
-  the 1,008 GB/s peak (0.2%). Big bandwidth headroom remains.
+- Still compute-bound on movegen: achieved value-buffer bandwidth ≈ 2 GB/s of
+  the 1,008 GB/s peak (0.2%). Large bandwidth headroom remains.
 
-### The one metric we could NOT capture
+### The one metric we couldn't capture
 
-The true `dram__throughput` % — the headline this phase targeted — needs Nsight
-**Compute** counters. RunPod runs pods as non-privileged containers, so `ncu`
-returns **`ERR_NVGPUCTRPERM`** (counter access needs host-level CAP_SYS_ADMIN /
+The true `dram__throughput` % — the metric this phase targeted — needs Nsight
+Compute counters. RunPod runs pods as non-privileged containers, so `ncu`
+returns `ERR_NVGPUCTRPERM` (counter access needs host-level CAP_SYS_ADMIN /
 the `NVreg_RestrictProfilingToAdminUsers=0` driver flag, unfixable from inside).
 nsys tracing works; the counter-based per-warp/occupancy/bandwidth numbers need a
 counter-enabled host (bare-metal or a provider that grants it). Everything below
 is still the plan for that run.
 
-## The headline metric
+## The target metric
 
-The sweep is a **bandwidth-bound dense sweep**, so the number is **achieved DRAM
-bandwidth (% of peak)**. Three sources, cheapest first (all via `cuda/profile.sh`):
+The sweep is a bandwidth-bound dense sweep, so the number is achieved DRAM
+bandwidth (% of peak). Three sources, cheapest first (all via `cuda/profile.sh`):
 
 1. **Harness self-report** — `cuda_sweep_check` prints a value-buffer bandwidth
    *lower bound* (5 B/pos/pass: v_old read + state read + v_new write) and % of
@@ -115,14 +115,14 @@ bandwidth (% of peak)**. Three sources, cheapest first (all via `cuda/profile.sh
 3. **Full `ncu --set full` report** — the whole analysis, opened in the UI.
 
 **Phase 4 gate (from ROADMAP):** a documented achieved bandwidth + a speedup vs
-the CPU baseline (**KQKR ~10.5 min single-thread memoryless**; `cuda_sweep_check
+the CPU baseline (KQKR ~10.5 min single-thread memoryless; `cuda_sweep_check
 KQKR` prints the GPU wall time to compare).
 
 ## How to read the profile → what to do
 
 | Nsight signal | Meaning | Action |
 |---|---|---|
-| `dram__throughput` high (>70% peak) | already bandwidth-bound, near peak | **done** — report it; little left to win |
+| `dram__throughput` high (>70% peak) | already bandwidth-bound, near peak | done — report it; little left to win |
 | `dram__throughput` low + `sm__throughput` low | latency/occupancy bound | raise occupancy (candidates 1–3) |
 | `sm__throughput` high, `dram` low | compute-bound (unexpected here) | cut per-thread work (candidates 1, 4) |
 | `warps_active` low + high `registers_per_thread` | register pressure caps occupancy | shrink per-thread footprint (candidates 1, 2) |
@@ -133,11 +133,11 @@ KQKR` prints the GPU wall time to compare).
 The per-thread footprint of `sweep_update` is the prime suspect for low
 occupancy. Rough stack/local sizes per thread:
 
-- `generate_legal` builds **two** `MoveList`s (pseudo + out) = **~1 KB** ← biggest
-- `int empty[64]` in `comb_decode` **and** every `comb_encode` call = 256 B each
+- `generate_legal` builds two `MoveList`s (pseudo + out) = ~1 KB ← biggest
+- `int empty[64]` in `comb_decode` and every `comb_encode` call = 256 B each
 - `Position` (8 bitboards = 64 B), `MoveList ml` in the update (512 B)
 
-So the checklist's headline item (`empty[64]`) is real but **not** the largest —
+So the checklist's top-ranked item (`empty[64]`) is real but not the largest —
 measure before assuming. Candidates, each oracle-gated after applying:
 
 1. **Fuse the legality filter into the sweep (drop the second MoveList).** The
@@ -188,7 +188,7 @@ measure before assuming. Candidates, each oracle-gated after applying:
   memory*, so on early/busy passes we'd pay thousands-to-millions of PCIe atomic
   transactions per pass — an unbounded cost — to save one tiny bounded copy. The
   synchronous wait is unchanged either way (`cudaDeviceSynchronize()` still
-  required before reading the flag), and the flag is entirely off the headline
+  required before reading the flag), and the flag is entirely off the target
   `dram__throughput` metric (that's per-kernel device bandwidth). If per-pass host
   overhead ever *did* matter, the right fix is the opposite direction — keep the
   flag in fast device memory and check convergence only every K passes (amortize
