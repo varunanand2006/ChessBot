@@ -27,6 +27,7 @@
 #include "position.hpp"        // to_fen for the 5-man sample dump
 #include "slider.hpp"
 #include "tb_comb_index.hpp"
+#include "tb_disk.hpp"          // write_table: persist the solved table
 #include "tb_material.hpp"      // shared tb::parse_material (comb cap)
 #include "tb_solve.hpp"
 #include "tb_sweep_device.hpp"
@@ -204,6 +205,26 @@ int main(int argc, char** argv) {
     std::vector<int16_t> got(N);
     CUDA_CHECK(cudaMemcpy(got.data(), v_old, N * sizeof(int16_t), cudaMemcpyDeviceToHost));
 
+    // Persist the solved table when CHESS_TB_OUT names a file. This is the
+    // GPU-solve-to-disk hookup: the cloud worker sets CHESS_TB_OUT and uploads
+    // the result, so a 5-man table the GPU generates lands in object storage
+    // instead of being freed. The bit-exact ctest gate runs WITHOUT the env var
+    // and writes nothing. Called only on the success paths below (after the
+    // <=4-man PASS / after the 5-man stats), never for a table that failed its
+    // oracle check. write_table stores under the canonical material name, the
+    // same name tb::probe looks up, so the file drops straight into a table dir.
+    auto persist = [&]() {
+        const char* out = std::getenv("CHESS_TB_OUT");
+        if (!out || !*out) return;
+        tb::Table t;
+        t.value = got;  // copy: got is still needed by the caller (compare / dump)
+        if (tb::write_table(out, idx, t))
+            std::printf("  persisted %s (%llu entries) to %s\n",
+                        name.c_str(), (unsigned long long)N, out);
+        else
+            std::fprintf(stderr, "  WARNING: write_table failed for %s\n", out);
+    };
+
     // --- Headline metrics ---------------------------------------------------
     // The sweep is bandwidth-bound, so the number that matters is achieved DRAM
     // bandwidth. ncu (dram__bytes.sum) gives the true figure counting every
@@ -253,6 +274,7 @@ int main(int argc, char** argv) {
             std::printf("PASS: device sweep == solve_sweep_comb on all %llu positions "
                         "(max win DTM=%d plies = mate-in-%d).\n",
                         (unsigned long long)N, max_win, (max_win + 1) / 2);
+            persist();  // write only after the oracle confirms the table
             return 0;
         }
         std::printf("FAIL: %llu / %llu differ (first at %llu: got=%d oracle=%d)\n",
@@ -317,5 +339,6 @@ int main(int argc, char** argv) {
     for (void* p : frees) cudaFree(p);
     std::printf("  wrote %d+2 sample positions to %s\n", n_samples, csv_path.c_str());
     std::printf("  verify: python python/verify_tablebase.py --csv %s\n", csv_path.c_str());
+    persist();  // 5-man has no CPU oracle; stats above are the on-box sanity check
     return 0;
 }
