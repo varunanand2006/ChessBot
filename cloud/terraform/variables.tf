@@ -47,7 +47,7 @@ variable "materials" {
 variable "repo_url" {
   description = "Git URL the instance clones to build the worker image."
   type        = string
-  default     = "https://github.com/varunanand/chess.git"
+  default     = "https://github.com/varunanand2006/ChessBot.git"
 }
 
 variable "repo_ref" {

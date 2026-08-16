@@ -12,7 +12,7 @@ tb_prefix   = "v1"
 instance_type = "g5.xlarge"
 
 # The instance clones this to build the worker image.
-repo_url = "https://github.com/varunanand/chess.git"
+repo_url = "https://github.com/varunanand2006/ChessBot.git"
 repo_ref = "master"
 
 # Canonical material names (K + white pieces + K + black pieces).
