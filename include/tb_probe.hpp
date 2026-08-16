@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include <string>
+
 #include "position.hpp"
 
 namespace tb {
@@ -30,8 +32,16 @@ struct ProbeResult {
     int  dtm   = 0;      // plies to mate (deliver if win / be mated if loss); 0 if draw
 };
 
-// Probe `pos`. Builds+caches the material's table on first use. Cached tables
-// persist for the life of the process, reused across games.
+// Directory searched for persisted `<MATERIAL>.tb` files (canonical name, e.g.
+// "KQKR.tb"). Empty (the default) disables disk probing. When set, probe() uses
+// an on-disk table if one exists for the position's material — this is how a
+// GPU-generated 5-man table gets used without regenerating it. Loaded tables are
+// cached; materials with no file are remembered so probing isn't retried.
+void set_table_dir(const std::string& dir);
+
+// Probe `pos`. Prefers an on-disk table (any persisted material, incl. 5-man),
+// else builds+caches the <=4-man dense table in RAM. Cached tables persist for
+// the life of the process, reused across games.
 ProbeResult probe(const Position& pos);
 
 }  // namespace tb

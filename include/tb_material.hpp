@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cctype>
 #include <string>
 #include <vector>
@@ -92,6 +93,23 @@ inline bool parse_material(const char* s, std::vector<Piece>& extras,
     name += "K";
     for (const Piece& p : extras) if (p.color == Color::Black) name += type_letter(p.type);
     return true;
+}
+
+// Canonical material name, independent of the order `extras` was built in: each
+// side's pieces are sorted Q,R,B,N (descending type value). So the same material
+// always maps to the same string (e.g. "KQRKR"), which is used as the on-disk
+// `.tb` filename — the writer and the probe must agree on it.
+inline std::string material_name_canonical(const std::vector<Piece>& extras) {
+    auto side = [&](Color c) {
+        std::vector<PieceType> ts;
+        for (const Piece& p : extras) if (p.color == c) ts.push_back(p.type);
+        std::sort(ts.begin(), ts.end(),
+                  [](PieceType a, PieceType b) { return type_index(a) > type_index(b); });
+        std::string s;
+        for (const PieceType t : ts) s += type_letter(t);
+        return s;
+    };
+    return "K" + side(Color::White) + "K" + side(Color::Black);
 }
 
 }  // namespace tb

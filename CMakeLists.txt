@@ -111,7 +111,8 @@ add_library(chess_engine STATIC
         src/tb_solve.cpp
         src/tb_solve_comb.cpp
         src/tb_sweep_setup.cpp
-        src/tb_probe.cpp)
+        src/tb_probe.cpp
+        src/tb_disk.cpp)
 target_link_libraries(chess_engine
         PUBLIC  chess_headers
         PRIVATE chess_project_options)

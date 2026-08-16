@@ -6,9 +6,11 @@
 // FEN may be given as the remaining args (unquoted, space-separated); if
 // omitted, the standard start position is used.
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -20,9 +22,13 @@
 #include "position.hpp"
 #include "search.hpp"
 #include "slider.hpp"
+#include "tb_comb_index.hpp"
+#include "tb_disk.hpp"
 #include "tb_index.hpp"
 #include "tb_material.hpp"
+#include "tb_probe.hpp"
 #include "tb_solve.hpp"
+#include "tb_sweep_setup.hpp"
 #include "types.hpp"
 
 namespace {
@@ -131,6 +137,77 @@ int run_tbdump(int argc, char** argv) {
         const char* cat = (v > 0) ? "win" : (v < 0) ? "loss" : "draw";
         const int signed_dtm = (v > 0) ? tb::win_dtm(v) : (v < 0) ? -tb::loss_dtm(v) : 0;
         std::printf("%s,%s,%d\n", to_fen(idx.decode(i)).c_str(), cat, signed_dtm);
+    }
+    return 0;
+}
+
+// ---- Tablebase persistence -------------------------------------------------
+
+// Recompute WDL + deepest mate over a value payload (comb-indexed). Used by both
+// tbsave (report what was written) and tbload (report what was read), so the two
+// commands print comparable numbers for the same material.
+void value_stats(const std::vector<int16_t>& value, std::size_t& w, std::size_t& l,
+                 std::size_t& d, int& max_win_dtm) {
+    w = l = d = 0;
+    max_win_dtm = 0;
+    for (const int16_t v : value) {
+        if (v > 0)      { ++w; max_win_dtm = std::max(max_win_dtm, tb::win_dtm(v)); }
+        else if (v < 0) { ++l; }
+        else            { ++d; }
+    }
+}
+
+// chess tbsave <material> <path> — solve the material on the host (the same
+// combinatorial sweep the GPU runs, via sweep_host_reference) and persist it.
+// Practical for <= 4 men on CPU; 5-man is the GPU's job (this is its CPU analog).
+int run_tbsave(int argc, char** argv) {
+    std::vector<tb::Piece> extras;
+    std::string name;
+    if (argc < 4 || !tb::parse_material(argv[2], extras, name, /*max_extras=*/6)) {
+        std::fprintf(stderr, "usage: chess tbsave <material> <path>   e.g. KQK, KQKR\n");
+        return 1;
+    }
+    const char* path = argv[3];
+
+    tb::CombIndex idx(std::move(extras));
+    std::printf("solving %s (%zu comb positions) on the host...\n", name.c_str(), idx.size());
+    const auto t0 = std::chrono::steady_clock::now();
+    int passes = 0;
+    tb::Table t;
+    t.value = tb::sweep_host_reference(idx, &passes);
+    const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+
+    if (!tb::write_table(path, idx, t)) return 1;
+
+    std::size_t w, l, d; int mw;
+    value_stats(t.value, w, l, d, mw);
+    std::printf("wrote %s  N=%zu  W=%zu L=%zu D=%zu  maxWinDTM=%d plies (mate-in-%d)  %d passes  %.1fs\n",
+                path, idx.size(), w, l, d, mw, (mw + 1) / 2, passes, secs);
+    return 0;
+}
+
+// chess tbload <path> [FEN...] — load a .tb, report its stats, and (if a FEN is
+// given) probe that position, exercising the on-disk probe path end to end.
+int run_tbload(int argc, char** argv) {
+    if (argc < 3) { std::fprintf(stderr, "usage: chess tbload <path> [FEN...]\n"); return 1; }
+    auto tbl = tb::DiskTable::open(argv[2]);
+    if (!tbl) return 1;  // open() already explained why on stderr
+
+    std::vector<int16_t> value(tbl->size());
+    for (std::size_t i = 0; i < tbl->size(); ++i) value[i] = tbl->value_at(i);
+    std::size_t w, l, d; int mw;
+    value_stats(value, w, l, d, mw);
+    std::printf("loaded %s  material=%s  N=%zu  W=%zu L=%zu D=%zu  maxWinDTM=%d plies (mate-in-%d)\n",
+                argv[2], tbl->name().c_str(), tbl->size(), w, l, d, mw, (mw + 1) / 2);
+
+    if (argc >= 4) {
+        Position pos;
+        const std::string fen = join_fen(argc, argv, 3);
+        if (!set_fen(pos, fen)) { std::fprintf(stderr, "invalid FEN: %s\n", fen.c_str()); return 1; }
+        const int16_t v = tbl->probe(pos);
+        if (v > 0)      std::printf("probe: WIN  for side to move, mate in %d plies\n", tb::win_dtm(v));
+        else if (v < 0) std::printf("probe: LOSS for side to move, mated in %d plies\n", tb::loss_dtm(v));
+        else            std::printf("probe: DRAW\n");
     }
     return 0;
 }
@@ -297,10 +374,20 @@ int run_play(int argc, char** argv) {
 int main(int argc, char** argv) {
     slider::init();  // build magic tables once at startup
 
+    // Opt-in tablebase probing: point CHESS_TB_DIR at a directory of <MATERIAL>.tb
+    // files and the search uses them — disk tables for persisted/5-man material,
+    // in-RAM dense tables for <=4-man. Unset (default) leaves probing off.
+    if (const char* dir = std::getenv("CHESS_TB_DIR")) {
+        tb::set_table_dir(dir);
+        search::set_use_tablebase(true);
+    }
+
     if (argc >= 3 && std::strcmp(argv[1], "perft") == 0)  return run_perft(argc, argv, false);
     if (argc >= 3 && std::strcmp(argv[1], "divide") == 0) return run_perft(argc, argv, true);
     if (argc >= 2 && std::strcmp(argv[1], "tb") == 0)     return run_tb(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "tbdump") == 0) return run_tbdump(argc, argv);
+    if (argc >= 2 && std::strcmp(argv[1], "tbsave") == 0) return run_tbsave(argc, argv);
+    if (argc >= 2 && std::strcmp(argv[1], "tbload") == 0) return run_tbload(argc, argv);
     if (argc >= 3 && std::strcmp(argv[1], "search") == 0) return run_search(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "play") == 0)   return run_play(argc, argv);
 
@@ -310,6 +397,8 @@ int main(int argc, char** argv) {
     std::printf("  chess divide <depth> [FEN...]\n");
     std::printf("  chess tb     <material>   e.g. Q, R, KQK, KQKR, KRKN\n");
     std::printf("  chess tbdump <material> [N]        sample positions as CSV (fen,cat,dtm)\n");
+    std::printf("  chess tbsave <material> <path>     solve + persist a table to disk (.tb)\n");
+    std::printf("  chess tbload <path> [FEN...]       load a .tb; probe a position if given\n");
     std::printf("  chess search <depth> [FEN...]      best move for a position\n");
     std::printf("  chess play   [depth] [FEN...]      play vs the engine (you are White)\n");
     return 0;

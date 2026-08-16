@@ -119,6 +119,12 @@ add_executable(test_tb_comb_solve test_tb_comb_solve.cpp)
 target_link_libraries(test_tb_comb_solve PRIVATE chess_engine chess_project_options)
 add_test(NAME tb_comb_solve COMMAND test_tb_comb_solve)
 
+# Persistence: a solved CombIndex table written to disk round-trips bit-exact and
+# probes correctly on reload; corruption is rejected. Fast (3-man KRK/KQK).
+add_executable(test_tb_disk test_tb_disk.cpp)
+target_link_libraries(test_tb_disk PRIVATE chess_engine chess_project_options)
+add_test(NAME tb_disk COMMAND test_tb_disk)
+
 # Phase 2 / Step 2.1: tablebase position indexing bijection + symmetry.
 # Fast tier = 3-man; slow tier adds 4-man (millions of positions).
 add_executable(test_tb_index test_tb_index.cpp)
