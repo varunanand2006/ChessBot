@@ -1,0 +1,24 @@
+#!/bin/bash
+# Runs once at boot on the DLAMI (drivers + Docker + NVIDIA toolkit preinstalled).
+# Output lands in /var/log/cloud-init-output.log (readable over SSM).
+set -euxo pipefail
+
+systemctl start docker || true
+
+cd /root
+git clone --depth 1 --branch ${repo_ref} ${repo_url} chess
+cd chess
+
+# Build the worker image ON THIS INSTANCE, so the engine's -O3 -march=native
+# targets this exact CPU (building elsewhere risks a SIGILL on newer ISA).
+docker build -f cloud/Dockerfile -t chess-tb-worker .
+
+# Generate the materials straight to S3. --gpus all exposes the A10G; the worker
+# skips any <MATERIAL>.tb already in the bucket, so an interrupted+relaunched
+# spot instance resumes instead of redoing finished tables.
+docker run --rm --gpus all chess-tb-worker \
+  --dest s3://${bucket}/${tb_prefix} ${materials}
+
+# The box exists only to fill the bucket. Shutdown terminates it (the instance's
+# shutdown behavior is set to terminate), so a finished/idle worker stops billing.
+shutdown -h now

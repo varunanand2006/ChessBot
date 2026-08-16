@@ -79,10 +79,11 @@ COPY --from=builder /opt/chess/build/chess                 /opt/chess/build/ches
 COPY --from=builder /opt/chess/build/cuda/cuda_sweep_check /opt/chess/build/cuda/cuda_sweep_check
 COPY --from=builder /opt/chess/cloud/tb_batch.py           /opt/chess/cloud/tb_batch.py
 
-# The image *is* the worker: `docker run <img> --dest s3://bucket/prefix KQKR ...`.
-# --chess is baked so callers only supply the destination and material list.
-# (The GPU 5-man path — driving cuda_sweep_check and persisting its table — lands
-# once sweep_check.cu calls write_table; the CPU `tbsave` path here already
-# generates and uploads <=4-man tables end-to-end.)
-ENTRYPOINT ["python3", "/opt/chess/cloud/tb_batch.py", "--chess", "/opt/chess/build/chess"]
+# The image *is* the worker: `docker run --gpus all <img> --dest s3://bucket/prefix KQRKR ...`.
+# --chess and --sweep are baked so callers only supply the destination + materials.
+# The worker routes 5-man+ to cuda_sweep_check (GPU, needs --gpus all) and <=4-man
+# to `chess tbsave` (CPU); each is the faster correct path for its size.
+ENTRYPOINT ["python3", "/opt/chess/cloud/tb_batch.py", \
+            "--chess", "/opt/chess/build/chess", \
+            "--sweep", "/opt/chess/build/cuda/cuda_sweep_check"]
 CMD ["--help"]

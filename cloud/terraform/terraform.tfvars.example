@@ -1,0 +1,19 @@
+# Copy to terraform.tfvars and edit. All values have defaults; override as needed.
+
+region      = "us-east-1"
+name_prefix = "chess-tb"
+
+# Leave empty to auto-generate a globally-unique name, or pin one to reuse the
+# bucket across applies (so tables survive `terraform destroy`).
+bucket_name = ""
+tb_prefix   = "v1"
+
+# g5.xlarge = 1x A10G, 4 vCPU (fits an 8-vCPU spot quota).
+instance_type = "g5.xlarge"
+
+# The instance clones this to build the worker image.
+repo_url = "https://github.com/varunanand/chess.git"
+repo_ref = "master"
+
+# Canonical material names (K + white pieces + K + black pieces).
+materials = ["KQKR", "KRKN", "KQKN", "KRKB"]

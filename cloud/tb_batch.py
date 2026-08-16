@@ -3,8 +3,8 @@
 tb_batch.py -- idempotent tablebase generation worker.
 
 For each material in the work list, if its <MATERIAL>.tb is not already present
-in the destination, solve it with the chess binary and upload it. Skipping
-already-present tables is what makes the worker:
+in the destination, solve it and upload it. Skipping already-present tables is
+what makes the worker:
 
   * idempotent  -- safe to re-run; a finished table is never recomputed.
   * resumable   -- a spot-instance interruption just leaves that one material
@@ -16,6 +16,17 @@ already-present tables is what makes the worker:
                    already in the bucket" idempotency is why no lock/queue service
                    is needed for a first version.
 
+Solve backends:
+  * CPU (--chess):  `chess tbsave <material> <out>` -- the host sweep. Fast for
+                    <=4-man.
+  * GPU (--sweep):  `cuda_sweep_check <material>` with CHESS_TB_OUT=<out> -- the
+                    retrograde sweep on the device, ~40-60 s/material on an A10G.
+                    This is the point of a GPU instance.
+
+Routing: a 5-man (or larger) material goes to the GPU when --sweep is given,
+otherwise to the CPU. <=4-man always uses the CPU path -- the GPU harness runs a
+slow CPU oracle for those, so tbsave is the faster route there.
+
 The destination is a local directory (for testing) or an s3://bucket/prefix (the
 real run); the same code drives both, so this script is validated locally and
 then runs unchanged on the cloud GPU instances.
@@ -24,8 +35,10 @@ Materials must use the canonical name the engine probes by: K + White's pieces
 (Q,R,B,N order) + K + Black's pieces, e.g. KQKR, KRKN, KQRKR.
 
 Usage:
-    tb_batch.py --chess ./build/chess.exe --dest ./bucket KQKR KRKN
-    tb_batch.py --chess ./chess --dest s3://my-tb-bucket/v1 --manifest materials.txt
+    tb_batch.py --chess ./build/chess.exe --dest ./bucket KRK KQKR
+    tb_batch.py --chess /opt/chess/build/chess \
+                --sweep /opt/chess/build/cuda/cuda_sweep_check \
+                --dest s3://my-tb-bucket/v1 KQRKR KRBKN
 """
 
 import argparse
@@ -57,17 +70,51 @@ def dest_put(dest, local_path, name):
         shutil.copy2(local_path, os.path.join(dest, key))
 
 
-def solve(chess, material, local_path):
-    """Run `chess tbsave <material> <local_path>`; nonzero exit raises."""
-    subprocess.run([chess, "tbsave", material, local_path], check=True)
+def men(material):
+    """Number of men (pieces) in a canonical material name, e.g. KQKR -> 4."""
+    return sum(1 for c in material if c.isalpha())
+
+
+def solve_cpu(chess, material, out_path):
+    """`chess tbsave <material> <out_path>` (host solve); nonzero exit raises."""
+    subprocess.run([chess, "tbsave", material, out_path], check=True)
+
+
+def solve_gpu(sweep, material, out_path):
+    """`cuda_sweep_check <material>` with CHESS_TB_OUT set (device solve).
+
+    The harness writes the table to CHESS_TB_OUT only on its success path, so a
+    missing output file means the solve did not happen (e.g. no GPU on the box) --
+    surfaced as an error rather than uploading nothing. cwd is the output dir so
+    the harness's sample-dump CSV lands beside it (and is discarded with the temp
+    dir), not wherever the worker was launched.
+    """
+    env = dict(os.environ, CHESS_TB_OUT=out_path)
+    subprocess.run([sweep, material], check=True, env=env,
+                   cwd=os.path.dirname(out_path) or ".")
+    if not os.path.exists(out_path):
+        raise RuntimeError(
+            "%s: sweep produced no table (no GPU, or solve failed)" % material)
+
+
+def solve(material, out_path, chess, sweep):
+    """Pick the backend: GPU for 5-man+ when available, else CPU tbsave."""
+    if sweep and men(material) >= 5:
+        print("[gpu]   %s (%d-man) via %s" % (material, men(material),
+                                              os.path.basename(sweep)))
+        solve_gpu(sweep, material, out_path)
+    else:
+        print("[cpu]   %s (%d-man) via tbsave" % (material, men(material)))
+        solve_cpu(chess, material, out_path)
 
 
 def main():
     ap = argparse.ArgumentParser(description="Idempotent tablebase generation worker.")
-    ap.add_argument("--chess", required=True, help="path to the chess binary")
+    ap.add_argument("--chess", required=True, help="path to the chess binary (CPU solve)")
+    ap.add_argument("--sweep", help="path to cuda_sweep_check (GPU solve for 5-man+)")
     ap.add_argument("--dest", required=True, help="output directory or s3://bucket/prefix")
     ap.add_argument("--manifest", help="file with one material per line (# comments ok)")
-    ap.add_argument("materials", nargs="*", help="materials, e.g. KQKR KRKN")
+    ap.add_argument("materials", nargs="*", help="materials, e.g. KQKR KQRKR")
     args = ap.parse_args()
 
     work = list(args.materials)
@@ -86,8 +133,7 @@ def main():
             continue
         with tempfile.TemporaryDirectory() as td:
             local_path = os.path.join(td, m + ".tb")
-            print("[solve] %s ..." % m)
-            solve(args.chess, m, local_path)
+            solve(m, local_path, args.chess, args.sweep)
             dest_put(args.dest, local_path, m)
             print("[done]  %s -> %s" % (m, args.dest))
             generated += 1
