@@ -1,0 +1,28 @@
+# Keep the build context small and reproducible: never ship host build outputs
+# (they hold -march=native binaries for the DEV CPU and would be rebuilt anyway),
+# VCS/editor state, or Python caches. The Docker build re-configures and
+# re-compiles from source inside the CUDA image.
+#
+# This is a BuildKit per-Dockerfile ignore (named <Dockerfile>.dockerignore), so
+# it is honored when building with `docker build -f cloud/Dockerfile .`. Paths are
+# relative to the build context (the repo root).
+build/
+build-*/
+.git/
+.idea/
+.vs/
+.vscode/
+.venv/
+**/__pycache__/
+*.pyc
+*.pyo
+*.o
+*.obj
+*.a
+*.exe
+*.csv
+*.pt
+pieces/
+compile_commands.json
+CMakeCache.txt
+CMakeFiles/
