@@ -90,7 +90,10 @@ def solve_gpu(sweep, material, out_path):
     dir), not wherever the worker was launched.
     """
     env = dict(os.environ, CHESS_TB_OUT=out_path)
-    subprocess.run([sweep, material], check=True, env=env,
+    # abspath: we set cwd to the output dir (so the harness's dump CSV lands there
+    # and is cleaned up with the temp dir), but that means a relative sweep path
+    # would resolve against the temp dir and not be found. Resolve it up front.
+    subprocess.run([os.path.abspath(sweep), material], check=True, env=env,
                    cwd=os.path.dirname(out_path) or ".")
     if not os.path.exists(out_path):
         raise RuntimeError(
