@@ -1,525 +1,209 @@
-# Chess Engine — C++/CUDA rewrite
+# Chess Engine — C++ & CUDA
 
-A ~2000-ELO chess engine, originally written from scratch in Python (documented
-in [The origin — Python engine](#the-origin--python-engine) below) and rewritten
-in data-oriented C++20: bitboard move generation, alpha-beta search, and a
-Texel-tuned evaluation. A CUDA component generates endgame tablebases by GPU
-retrograde analysis.
+A chess engine that plays at roughly **2000 ELO**, written in data-oriented
+C++20, plus a **CUDA** component that generates endgame tablebases on the GPU by
+retrograde analysis. It started life as a Python engine (still in `python/`, and
+walked through in [`python/README.md`](python/README.md)); this is the C++
+rewrite, made much faster and extended onto the GPU.
 
-The GPU solver generates every distinct-piece pawnless 5-man endgame tablebase —
-all 28 materials — each verified against the Lichess (Gaviota DTM) tablebase, with
-forced mates as deep as mate-in-107 (KBN vs KN), one of the deepest pawnless 5-man
-endings known. The Status section below has the per-material breakdown;
-[FINDINGS.md](FINDINGS.md) collects the endgame results that came out of the tables.
-
-This is a portfolio project targeting GPU/systems roles, which fixes two rules:
-performance is reported as absolute numbers (NPS, positions/s, GB/s), never as
-percentage speedups; and every performance-relevant choice carries a rationale
-comment naming what the alternative would have cost.
+The headline GPU result: every distinct-piece, pawnless **5-piece endgame** —
+all 28 material combinations, 5.9 billion positions — solved to perfect play on
+rented GPUs, streamed to S3, and verified against an external tablebase with zero
+mismatches. The deepest forced mate found is **mate-in-107**, one of the longest
+known in this class of endgame.
 
 ---
 
-## Architecture
-
-- **CPU side — C++ engine.** Struct-of-bitboards board (`by_type[6]` +
-  `by_color[2]`, no mailbox), magic-bitboard sliders (chosen over BMI2 PEXT so
-  the same multiply-shift ports to the GPU), make/unmake with a caller-owned
-  `StateInfo` stack, Zobrist keys as a correctness invariant, iterative-deepening
-  alpha-beta with a flat-array transposition table and quiescence.
-- **GPU side — CUDA endgame tablebases.** Dense retrograde-analysis sweep over an
-  integer-indexed position space, iterated to convergence — a bandwidth-bound
-  frontier BFS. The CPU tablebase solver (`solve_sweep_comb`) is the bit-exact
-  oracle: every device step is diffed against it before it is trusted.
-- **Explicitly rejected** (with rationale in `CLAUDE.md`): NNUE over PCIe
-  (scope); MCTS/AlphaZero search (bad GPU workload — irregular tree, warp
-  divergence, atomic contention).
-
-## Build / test / benchmark (C++)
-
-Toolchain: GCC (MinGW-w64 UCRT) + CMake ≥3.20 + Ninja. Release is `-O3
--march=native`; the CUDA targets appear only when a CUDA compiler is present.
+## Play against it
 
 ```bash
-# Configure + build (Release by default)
+cmake -B build && cmake --build build     # one-time build (GCC/MinGW + Ninja)
+python web/server.py                       # serves the web UI at :8000
+```
+
+Open **http://localhost:8000** and play (you are White). The browser UI has a
+click-to-move board, a live evaluation bar you can hide, undo/redo, a move list,
+and a strength slider that sets the engine's search depth — all served by one C++
+process behind a ~120-line standard-library Python bridge.
+
+<!-- Screenshot: drop an image at docs/web-ui.png and uncomment the line below.
+<p align="center"><img src="docs/web-ui.png" alt="Web UI" width="720"></p> -->
+
+To make the engine play **perfect endgames**, point it at a directory of
+generated `.tb` tablebase files — it then probes them instead of guessing:
+
+```bash
+CHESS_TB_DIR=/path/to/tables python web/server.py
+```
+
+Prefer the terminal? `./build/chess.exe play 4` plays a game in the console at
+depth 4.
+
+---
+
+## Highlights
+
+**The engine**
+- ~2000 ELO: material + Texel-tuned piece-square evaluation, iterative-deepening
+  alpha-beta search with a transposition table and quiescence.
+- Move generator verified by **perft** to exact node counts on the standard
+  position set (startpos to depth 6 = 119,060,324 nodes; Kiwipete to depth 5 =
+  193,690,690), matching the published reference values.
+- ~21 million nodes/sec in move generation, ~3.5 million nodes/sec in full
+  alpha-beta search (single thread, `-O3 -march=native`). Reported as absolute
+  numbers throughout, never as percentage speedups.
+
+**The GPU tablebase pipeline**
+- All **28 distinct-piece pawnless 5-piece endgames** solved to perfect play,
+  209,674,080 positions each, on rented RTX 4090s.
+- **Multi-GPU**: a fan-out script gives each GPU a disjoint slice of the work, so
+  N GPUs run at ~N× throughput. The 28-table batch finished in under an hour on a
+  4-GPU pod.
+- **Cloud-native**: infrastructure (S3 bucket, scoped IAM, GPU pod) is defined in
+  **Terraform**; each solved table streams straight to **S3**, versioned and
+  encrypted.
+- **Verified**: every table checked against the Lichess (Gaviota) tablebase API —
+  896/896 sampled positions match on exact category and distance-to-mate.
+- The generated tables load back into the engine, so the bot plays these endgames
+  perfectly. See [`FINDINGS.md`](FINDINGS.md) for the endgame results that fell
+  out of the tables (fortress draws, the mate-in-107, and more).
+
+---
+
+## How the engine plays
+
+The board is represented with bitboards (one 64-bit word per piece type and
+color) for fast move generation; the interesting decisions are in *search* and
+*evaluation*, so those are what this section covers.
+
+**Search — how it picks a move.** The engine models the game with **minimax**:
+White maximizes a score, Black minimizes it, exploring move sequences to a fixed
+depth and evaluating the leaves. On top of that:
+
+- **Alpha-beta pruning** discards branches that provably can't affect the result,
+  which (with good move ordering) roughly doubles the depth reachable in a given
+  time budget without changing the answer.
+- **Move ordering** (most-valuable-victim / least-valuable-attacker for captures,
+  plus the best move from the transposition table) tries strong moves first, so
+  alpha-beta prunes as early as possible.
+- **Quiescence search** extends past the depth limit through capture sequences
+  until the position is quiet, which removes the "horizon effect" where the engine
+  stops mid-trade and mis-scores the position.
+- A **transposition table** keyed by an incrementally-updated **Zobrist hash**
+  remembers positions already searched, so a position reached by a different move
+  order isn't re-searched from scratch. The same hashes detect threefold
+  repetition.
+- **Iterative deepening** searches depth 1, then 2, and so on. Each pass seeds the
+  next one's move ordering, so searching to depth *N* this way is faster than
+  jumping straight to *N*.
+
+**Evaluation — how it scores a position.** Material count plus **piece-square
+tables** that reward good squares (knights in the center, rooks on open files, a
+castled king in the middlegame but a central king in the endgame). The table
+values were **Texel-tuned**: fit to hundreds of thousands of real positions by
+gradient descent rather than set by hand. The full tuning pipeline lives on the
+Python side ([`python/README.md`](python/README.md)).
+
+**Endgame tablebases — perfect play, no search.** When the position is one of the
+generated tablebases, the engine skips the heuristic entirely and looks up the
+exact result — win/draw/loss and distance-to-mate. This both plays perfectly and
+prunes hard: in a K+R-vs-K endgame it settles the position in ~170 nodes where the
+heuristic search visits ~1.8 million.
+
+---
+
+## Endgame tablebases on the GPU
+
+A tablebase is a solved database of every position in a given material (say, rook
+and bishop vs. rook): for each one it stores the game-theoretic result and how
+many moves the mate takes under perfect play. They're built by **retrograde
+analysis** — start from checkmates and work backwards, repeatedly, until every
+position's value stops changing.
+
+That backwards sweep is a great GPU workload: the same simple update applied to
+hundreds of millions of positions in parallel, iterated to convergence. This
+project builds it up in verified stages.
+
+**Indexing.** Every position maps to a dense integer and back. A naive scheme
+would need `64⁵` slots and explode at 5 pieces, so the index uses the
+**combinatorial number system** plus an 8-fold board-symmetry table — squeezing
+each 5-piece material down to ~210 million indices.
+
+**Solving.** One GPU thread per position runs the retrograde update; the whole
+table is swept over and over (a Jacobi iteration) until it converges. A CPU
+solver computes the same tables independently and the two are diffed
+position-by-position, so the GPU results are trusted before they're ever run at
+full scale.
+
+**Optimization, measured on real hardware.** On an RTX 4090 the sweep kernel was
+tuned from a naive port at 9,872 ms down to 575 ms on the 4-piece benchmark — a
+**17.2× speedup**, each step re-checked for bit-exact correctness. The biggest
+single win (5.3×) came from replacing a 256-byte per-thread scratch array with a
+single 64-bit bitmask: an occupancy effect that only measurement caught, not
+static reasoning. Full numbers and the profiling notes are in
+[`cuda/PROFILING.md`](cuda/PROFILING.md).
+
+**Scaling out.** The multi-GPU fan-out and the Terraform-provisioned S3 pipeline
+(above) take it from one benchmark material to all 28, generated in the cloud and
+stored durably. The infrastructure and its design trade-offs are documented in
+[`cloud/README.md`](cloud/README.md).
+
+| | |
+|---|---|
+| Positions indexed / solved | 5.87 billion indexed, 4.33 billion legal |
+| GPU throughput | ~343 million positions/sec at 5-piece scale |
+| GPU vs. CPU | ~1,096× faster than the same sweep single-threaded on CPU |
+| Deepest mate | mate-in-107 (KBN vs. KN), matched to Gaviota exactly |
+| Verification | 28/28 materials, 896/896 sampled positions match Lichess |
+
+---
+
+## Build, test, benchmark
+
+Toolchain: GCC (MinGW-w64 UCRT) + CMake ≥ 3.20 + Ninja. Release is the default
+(`-O3 -march=native`). The CUDA targets build only when a CUDA compiler is
+present, so the engine builds and all host-side tests run without a GPU.
+
+```bash
 cmake -B build
 cmake --build build
 
-# Fast test suite (excludes the ~28s deep perft); or drop -E for everything
+# Fast test suite (drop -E for everything, including the deep perft)
 ctest --test-dir build -E perft_deep
 
-# Perft, NPS, search-throughput, tablebase-generation benchmarks
-./build/chess.exe perft 6
+# Benchmarks: move-gen NPS, search NPS, tablebase generation
 ./build/benchmarks/bench.exe 3
 ./build/benchmarks/search_bench.exe
 ./build/benchmarks/tb_bench.exe
 
-# Inspect / use the tablebase
-./build/chess.exe tb KQKR                 # WDL + deepest-mate FEN
-./build/chess.exe search 6                # best move (per-depth line + NPS)
-./build/chess.exe play 4                  # play a game (you are White)
+# Try the engine directly
+./build/chess.exe search 6                 # best move for the start position
+./build/chess.exe tb KQKR                  # inspect a generated tablebase
+./build/chess.exe play 4                   # play a game in the terminal
 ```
 
-The full command list (divide, tbdump, external verification, the combinatorial
-indexer tests, eval-table regeneration) lives in `CLAUDE.md`.
-
-## Status
-
-### Engine (C++) — Phase 1 complete
-
-- Perft is exact on the full standard set: startpos→6 = 119,060,324,
-  Kiwipete→5 = 193,690,690, positions 3/4/5/6 all exact (reference values from the
-  Chess Programming Wiki, transcribed with citation).
-- Move generation: ~21 Mnps aggregate (best-of-3, Release, single-threaded,
-  correctness-first make/unmake legality filter).
-- Search: ~3.5 Mnps aggregate — iterative-deepening alpha-beta, flat-array TT
-  (2²² direct-mapped), quiescence with delta pruning, MVV-LVA + TT move ordering,
-  a faithful port of the Python search.
-
-### Endgame tablebases — 3-man + 4-man on CPU, all 28 distinct 5-man on GPU
-
-- Two independent retrograde DTM solvers (iterated sweep + min-priority-queue BFS)
-  that must agree. They reproduce 3-man theory (KQK mate-in-10, KRK mate-in-16,
-  KBK/KNK drawn) and the first 4-man, KQKR = mate-in-35, over all 2,467,122
-  positions — matching the known Nalimov maximum.
-- 5-man combinatorial indexer: a mixed-radix `CombIndex` (combinatorial number
-  system + a 462-config king-anchored symmetry table) plus a memoryless
-  GPU-shaped sweep, validated bit-exact against the dense oracle. The full 5-man
-  solve runs on the GPU (its stated purpose); the CUDA port section below has the
-  28-material results.
-- Tablebase probing in search returns exact WDL+DTM cutoffs: node reductions of
-  ~10,900× (KRK d12), ~19,900× (KQK d12), ~18,500× (KQKR d10) vs the heuristic.
-- Verified against the Lichess (Gaviota DTM) API on exact category and signed
-  distance-to-mate: 133/133 across ≤4-man (KQK/KRK/KBK/KQKR/KRKN), plus the 5-man
-  verification reported in the CUDA section.
-
-### CUDA port — Phases 0–5 validated on a real GPU (RTX 4090), bit-exact
-
-The device-shaped code compiles and runs on the host through a `CH_HD` =
-`__host__ __device__` macro (empty off-nvcc), so each phase is gated bit-exact
-against the CPU oracle with no GPU, then confirmed on real hardware. Full detail
-in [`cuda/ROADMAP.md`](cuda/ROADMAP.md); results and optimization log in
-[`cuda/PROFILING.md`](cuda/PROFILING.md).
-
-| Phase | What | Local gate (no GPU) | On-box (RTX 4090) |
-|---|---|---|---|
-| 0 · Scaffold | `CH_HD` macro, guarded CMake, hello + equality harness | CPU build unchanged | host==device, 1,008 GB/s peak |
-| 1 · Index primitives | binom / rank-unrank / D4 / king table / `CombIndex` on device | host mirror == `CombIndex`, 3.49M KQKR + 1.75M KRRK | `cuda_index_check` + `cuda_comb_index_check` |
-| 2 · Movegen + make/unmake | magic sliders + legal movegen device-side | host == reference over 980,664 perft nodes | sliders 524,288 cases + movegen |
-| 3 · Sweep kernel | one thread/position, Jacobi ping-pong to fixpoint | host sweep == `solve_sweep_comb` (KRK/KQK) | KQKR all 3,494,568, mate-in-35, bit-exact |
-| 4 · Profile + optimize | nsys breakdown + 3 measured optimizations | host-gated after each | 17.2× kernel speedup (below) |
-| 5 · Scale | solve real 5-man tables to completion | host setup + subs gated | all 28 distinct-piece materials, 209,674,080 positions each, 28/28 vs Lichess |
-
-#### Kernel optimization — measured on the 4-man KQKR gate (all 3,494,568 positions, mate-in-35)
-
-KQKR is the largest material with an affordable bit-exact CPU oracle, so the
-kernel was tuned there: every optimization is re-gated exact before it is trusted,
-and the same kernel then solves the 28 five-man tables (next section). One CUDA
-thread per position — ~3.5M threads across ~27,300 blocks, re-launched for each of
-the 65 Jacobi passes to convergence. On the RTX 4090:
-
-| Kernel | Time | Mpos/s | vs naive |
-|---|---:|---:|---:|
-| naive port | 9,872 ms | 23.0 | 1.0× |
-| + fuse legality filter | 9,416 ms | 24.1 | 1.05× |
-| + O(1) small-k binom | 3,057 ms | 74.3 | 3.23× |
-| + free-square bitmask | 575 ms | 394.8 | 17.2× |
-
-- The optimized kernel is ~1,096× faster than the same memoryless sweep on CPU
-  (~630 s single-thread), and ~9.4× faster than the CPU's memory-hungry
-  materialized solver (~5.4 s) while using near-zero memory. The largest single
-  win (5.3×) was replacing a 256-byte `int empty[64]` stack array with a
-  `uint64_t` bitmask — an occupancy effect the static analysis had ranked minor,
-  which only measurement caught.
-- nsys (which needs no hardware counters): the `k_sweep_pass` kernel is 100% of
-  GPU time, with launch/copy/sync overhead at 0.5%. The kernel is compute-bound on
-  the per-position movegen — achieved value-buffer bandwidth is ~2 GB/s of the
-  1,008 GB/s peak, leaving large headroom for a future frontier-work-list redesign.
-- The true DRAM-bandwidth % (the metric this phase originally targeted) needs
-  Nsight Compute counters, which RunPod locks in its non-privileged containers
-  (`ERR_NVGPUCTRPERM`); capturing it needs a counter-enabled host.
-- The first real `nvcc` build surfaced 5 device-portability bugs invisible to every
-  host gate (4× host-table ODR-uses and a slider-init segfault) — the payoff of
-  building on the actual GPU.
-
-#### Phase 5 — every distinct-piece pawnless 5-man table (28 materials) on the GPU
-
-The optimized sweep run at full 5-man scale on the RTX 4090 — the goal the GPU
-port was built for. Each material is 209,674,080 comb positions (~419 MB int16),
-solved and then checked against the Lichess (Gaviota DTM) API.
-
-All 28 distinct-piece pawnless 5-man materials were solved and verified: 28/28
-materials, 896/896 sample positions match Lichess, zero mismatches. Depth ranges
-from mate-in-5 (three heavy pieces vs a lone king) to mate-in-107 (KBN vs KN), one
-of the deepest pawnless 5-man endings known. Total GPU solve time 873 s.
-
-| material | mate-in | passes | solve (s) | Lichess |
-|---|---:|---:|---:|:---:|
-| KBN vs KN | **107** | 154 | 68.6 | 32/32 |
-| KRB vs KQ | 70 | 91 | 60.8 | 32/32 |
-| KRN vs KQ | 69 | 97 | 63.9 | 32/32 |
-| KQR vs KQ | 67 | 123 | 84.8 | 32/32 |
-| KRB vs KR | 65 | 118 | 64.7 | 32/32 |
-| KBN vs KQ | 53 | 91 | 59.7 | 32/32 |
-| KQN vs KQ | 41 | 71 | 46.1 | 32/32 |
-| KBN vs KR | 41 | 26 | 13.4 | 32/32 |
-| KQR vs KN | 40 | 19 | 11.7 | 32/32 |
-| KQR vs KR | 34 | 37 | 22.6 | 32/32 |
-| … 18 more (KQN·KRN·KQB·KRB variants, KQRB/KQRN/KQBN/KRBN vs K) | 5–41 | 11–66 | 7–41 | 32/32 |
-
-- Verification is sampled, not a full oracle: the memoryless CPU oracle over ~210M
-  positions is ~15–20 h per material, so it is not run at 5-man. Correctness rests
-  on (a) every device stage being bit-exact-gated at ≤4-man (the same kernels, just
-  larger N) and (b) an independent external oracle (Lichess/Gaviota) on a
-  per-material sample including each table's two deepest mates.
-- Solve time tracks mate depth (more Jacobi passes for deeper mates), not table
-  size — every table is the same 209,674,080 positions. Host setup per material
-  (classify 209M plus three ≤4-man capture sub-tables via a dense-solve-then-remap
-  step, not the ~10-min-each memoryless solver) is ~96 s; device footprint is
-  ~1.07 GB of the 24 GB.
-- The tables are generated, verified, and freed — not persisted. Wiring a
-  GPU-generated 5-man into the engine's probe path (a disk format plus loader) is
-  the natural next step; identical-piece materials (KRR vs K, …) additionally need
-  count-based capture detection in the solver.
+The correctness story is that the GPU code is a `__host__ __device__` port of the
+verified CPU code: every device stage is diffed against the CPU oracle on the host
+(no GPU needed) before it's trusted on hardware. `CLAUDE.md` has the exhaustive
+command list; [`cuda/ROADMAP.md`](cuda/ROADMAP.md) has the phase-by-phase gates.
 
 ## Repo layout
 
 ```
-/            CMakeLists.txt, CLAUDE.md, README
-/include     C++ engine + device-shaped headers (CH_HD)
-/src         C++ engine sources
-/tests       perft, unit, and host-side device-gate tests (CTest)
-/benchmarks  timing harnesses (NPS, TB generation, search, probing)
-/cuda        CUDA kernels + gates (built only where nvcc exists) + ROADMAP/PROFILING
-/python      legacy Python engine — preserved, NOT modified (the project's origin)
+include/     C++ engine headers (board, movegen, search, eval, tablebase, indexing)
+src/         engine sources + the CLI (chess.exe)
+tests/       perft + unit + host-side GPU-port gates (CTest, dependency-free)
+benchmarks/  timing harnesses (move-gen NPS, search NPS, tablebase generation)
+cuda/        CUDA kernels and gates + ROADMAP / PROFILING notes
+cloud/       Terraform + Docker + fan-out for multi-GPU generation to S3
+web/         browser UI (index.html) + a stdlib Python bridge to the engine
+python/      the original Python engine — preserved as the project's origin
 ```
 
----
-
-# The origin — Python engine
-
-The sections below document the original **Python** engine (~1400–1800 ELO): a
-terminal interface plus a Pygame GUI, built incrementally with each optimization
-layer's purpose and speed/strength tradeoff. It is preserved unchanged as the
-project's starting point — the C++ side mirrors its architecture, bitboard-idiomatic.
-
-## Quick Start
-
-**Terminal (PyPy recommended for full speed):**
-```bash
-pypy main.py
-```
-
-**GUI:**
-```bash
-# Step 1 — download piece images (run once)
-python download_pieces.py
-
-# Step 2 — install pygame
-pip install pygame
-
-# Step 3 — launch
-python gui.py
-```
-
-The GUI (`gui.py`) runs under CPython for Pygame compatibility. It launches `engine_main.py` as a PyPy subprocess and communicates over stdin/stdout, so the engine still runs at full PyPy speed.
-
----
-
-## Project Structure
-
-| File | Description |
-|---|---|
-| `constants.py` | Piece types, move flags, Zobrist tables, piece-square tables |
-| `board.py` | Board state, make/undo move, Zobrist hashing, attack detection |
-| `movegen.py` | Legal move generation for all piece types and special moves |
-| `search.py` | Minimax, alpha-beta, quiescence, transposition table, iterative deepening |
-| `main.py` | Terminal game loop with dynamic depth scaling |
-| `engine_main.py` | Subprocess engine with a clean stdin/stdout protocol for the GUI |
-| `gui.py` | Pygame GUI — PNG piece images, move selection, threaded engine |
-| `download_pieces.py` | Downloads the Wikimedia Commons chess piece PNG set |
-
----
-
-## How It Works
-
-Each feature below was added incrementally. Understanding the chain — and the tradeoffs each link introduces — explains how a naive exhaustive search becomes a ~1600 ELO engine.
-
----
-
-### 1. Depth-Limited Minimax
-
-Minimax models chess as a two-player zero-sum game. White tries to *maximise* the score; black tries to *minimise* it. The engine explores all sequences of moves to a fixed depth, calls `evaluate()` at the leaves, and propagates the best score back up. This lives in `search.py → find_best_move()` and `minimax()`.
-
-Without search, the engine can only look one move ahead — it has no concept of consequences. Minimax gives it the ability to reason about the future and avoid moves that look good immediately but lead to a worse position several turns later.
-
-**The tradeoff:**
-Depth is exponential. With ~35 legal moves per position, depth 5 requires evaluating roughly 35⁵ ≈ 52 million nodes. Every extra depth multiplies work by ~35. This is the fundamental bottleneck every other feature below works to break.
-
----
-
-### 2. Move Integer Bit Encoding
-
-Every chess move is packed into a single Python integer using bit shifts. The layout, defined in `movegen.py`:
-
-```
-bits  0–2:  from_row
-bits  3–5:  from_col
-bits  6–8:  to_row
-bits  9–11: to_col
-bits 12–14: flag  (normal / en passant / castling / promotion type)
-```
-
-Encoding and decoding are just shifts and masks:
-```python
-def encode_move(r1, c1, r2, c2, flag=FLAG_NORMAL):
-    return r1 | (c1 << 3) | (r2 << 6) | (c2 << 9) | (flag << 12)
-
-def decode_move(move):
-    return move & 7, (move>>3)&7, (move>>6)&7, (move>>9)&7, (move>>12)&7
-```
-
-The eight possible flags (`FLAG_NORMAL`, `FLAG_EN_PASSANT`, `FLAG_CASTLE_KINGSIDE`, `FLAG_CASTLE_QUEENSIDE`, and four promotion flags) are all encoded here — no separate object needed for any special move type.
-
-Python objects have significant overhead. Representing each move as a tuple or named object would slow down the millions of move comparisons, list insertions, and transposition table lookups the search performs. A single integer is as cheap as Python gets.
-
-**The tradeoff:**
-Essentially none. The only cost is slightly less readable code. The performance gain throughout the search tree is real, and PyPy's JIT particularly loves tight integer operations.
-
----
-
-### 3. Piece-Square Tables
-
-Each piece type has a hardcoded 8×8 table of positional bonuses in `constants.py`. Knights are rewarded for central squares, bishops for long diagonals, rooks for the 7th rank and open files. The king has two tables — `KING_TABLE` for the middlegame (incentivising castling and staying behind pawns) and `KING_END_TABLE` for the endgame (incentivising centralisation). The `evaluate()` function in `search.py` switches between them based on total material remaining:
-
-```python
-table = KING_END_TABLE if total_material < 1500 else KING_TABLE
-```
-
-Black's table values are mirrored using `table[7 - r][c]` so the same tables work for both sides without duplication.
-
-Pure material counting makes the engine play nonsensically — it has no preference for developing knights, no instinct to castle, no understanding that a centralised piece is stronger than a passive one. Piece-square tables encode these principles directly into `evaluate()` with essentially zero search cost.
-
-**The tradeoff:**
-Marginally slower evaluation per node (~1–2% overhead), but zero extra nodes searched. The ELO gain is entirely from playing more principled chess, not from deeper search.
-
----
-
-### 4. Alpha-Beta Pruning
-
-An extension of minimax that maintains two bounds — `alpha` (the best white can guarantee) and `beta` (the best black can guarantee). When the search proves a subtree cannot affect the final result — because one side already has something better — that entire subtree is pruned. The cutoff condition `beta <= alpha` is checked after every move in `minimax()`. The original alpha and beta values are saved at the start of each node to correctly classify the result for the transposition table.
-
-Alpha-beta is the most impactful algorithmic change possible for a minimax engine. In the best case (perfect move ordering) it reduces the tree from O(b^d) to O(b^(d/2)) — mathematically equivalent to doubling searchable depth for free. Even with average ordering it cuts the tree to roughly O(b^(3d/4)).
-
-**The tradeoff:**
-Alpha-beta always returns the exact same result as plain minimax — it is not an approximation. The only cost is a two-line comparison at every node. This is as close to a free lunch as algorithmic optimisation gets.
-
----
-
-### 5. Move Ordering
-
-Alpha-beta only prunes when it finds a good move *early*. If moves are searched in random order, almost nothing gets pruned. Move ordering in `search.py → score_move()` sorts moves before searching using two heuristics:
-
-- **MVV-LVA** (Most Valuable Victim, Least Valuable Attacker): captures are scored as `10000 + victim_value × 10 − attacker_value`. Capturing a queen with a pawn scores higher than capturing a pawn with a queen, ensuring the best captures are tried first.
-- **TT move first**: the best move stored in the transposition table for this position (from a previous search) is placed at the front of the list, since it is very likely to cause an early cutoff again.
-
-Alpha-beta without move ordering barely prunes anything in practice. With good ordering the engine approaches the theoretical O(b^(d/2)) limit. This compounds with every other feature — better ordering means deeper effective search for the same time budget.
-
-**The tradeoff:**
-A sort at every node adds some overhead. But the additional pruning from better ordering saves far more time than the sort costs. Net result: ~40–50% faster search, ~100 ELO stronger.
-
----
-
-### 6. Quiescence Search
-
-When the main search hits depth 0 and calls `evaluate()`, it may be looking at a position mid-capture — for example, a queen just took a pawn but the opponent can immediately recapture the queen next move. Evaluating here wildly overestimates the position. Quiescence search in `search.py → quiescence()` resolves this by continuing to search all captures (and en passant) beyond the depth limit until the position is "quiet" — no captures available. It also uses **delta pruning**: if `stand_pat + 900 < alpha`, no single capture can raise the score enough to matter, and the subtree is pruned immediately.
-
-Without quiescence search, the engine blunders constantly near its horizon — it sees material gains that evaporate one move later. This is the *horizon effect* and is one of the most damaging weaknesses of naive depth-limited search. Quiescence search essentially eliminates this class of blunder.
-
-**The tradeoff:**
-Unlike every other feature in this list, quiescence search makes the engine *slower* — it deliberately evaluates more nodes. At a tactically sharp position the quiescence tree can grow large. This is the only feature here that consciously trades speed for strength. The ~200 ELO gain makes it worth it by a significant margin.
-
----
-
-### 7. Transposition Table (Zobrist Hashing)
-
-Chess positions can be reached by many different move orders. Without a transposition table, the engine re-searches the same position from scratch every time it arrives there via a different path — wasting enormous work.
-
-The transposition table in `search.py` is a dictionary mapping position hash → `(depth, score, flag, best_move)`. Each position is identified by a **Zobrist hash** — a 64-bit integer built from `constants.py → ZOBRIST_TABLE`, a 13×8×8 array of random 64-bit numbers (one per piece type per square), seeded at `794613` for reproducibility. The hash is updated incrementally in `board.py → make_move()` and `undo_move()` by XORing in/out only the squares that changed, so recomputing from scratch is never needed.
-
-The `flag` field distinguishes three cases needed for correct alpha-beta integration:
-- `TT_EXACT` — the stored score is exact
-- `TT_LOWER_BOUND` — the score caused a beta cutoff; real score is at least this high
-- `TT_UPPER_BOUND` — no move improved alpha; real score is at most this high
-
-The same Zobrist hash powers **threefold repetition detection**: `board.position_history` counts occurrences per hash throughout the game, and `minimax()` returns 0 (draw) when a position has been seen twice already on the current path.
-
-The transposition table gives the engine *memory* across search paths. It avoids redundant re-search, improves move ordering via the stored best move, and enables iterative deepening to compound across iterations. The table persists across the entire game, so the engine also benefits from positions encountered earlier in the game.
-
-**The tradeoff:**
-Memory proportional to unique positions encountered. A small lookup cost at every node. The savings from avoiding re-search dwarf the overhead — net result: ~30–50% faster search, ~150 ELO stronger.
-
----
-
-### 8. Iterative Deepening
-
-Instead of searching directly to depth N, `find_best_move()` searches depth 1, then 2, then 3, up to the target depth. Each completed iteration's best move is preserved and inserted at the front of the move list for the next iteration:
-
-```python
-for depth in range(1, max_depth + 1):
-    priority_move = best_move if best_move is not None else tt_move
-    if priority_move in legal_moves:
-        legal_moves.remove(priority_move)
-        legal_moves.insert(0, priority_move)
-```
-
-The progress is visible in the terminal output:
-```
-  depth 1 -> score +30  best: Moved ♟ from e2 to e4
-  depth 2 -> score +15  best: Moved ♞ from g1 to f3
-  depth 3 -> score +25  best: ...
-```
-
-Shallower searches are cheap (depth 1 ≈ 35 nodes; depth 4 ≈ 1.5M nodes; depth 5 ≈ 52M nodes) and they populate the transposition table with good move estimates that make the final search significantly more efficient. Without iterative deepening, the depth-5 search has no move ordering guidance from prior iterations. With it, the best move from the previous iteration bubbles to the front at every node, maximising alpha-beta cutoffs throughout the tree.
-
-**The tradeoff:**
-~33% extra work from re-searching shallower depths. In return, the deepest iteration runs faster due to better ordering, and a valid best move is always available if the search is cut short. The net ELO gain from better ordering at depth is real despite the overhead.
-
----
-
-### 9. PyPy JIT Compiler
-
-PyPy is an alternative Python interpreter with a Just-In-Time compiler. Rather than interpreting bytecode line by line (CPython), PyPy profiles hot code paths and compiles them to native machine code at runtime. No code changes are required — the same `.py` files run on both interpreters.
-
-The GUI bridges the two runtimes via `engine_main.py`, which implements a clean text protocol over stdin/stdout:
-
-```
-newgame           → ok
-move e2e4         → ok | illegal
-go <depth>        → bestmove e7e5
-legal             → e2e4 d2d4 ... | none
-status            → ongoing white | check black | checkmate white | stalemate | draw repetition
-quit
-```
-
-`gui.py` spawns `engine_main.py` under PyPy and communicates through this protocol in a background thread, so the GUI stays responsive while the engine is thinking.
-
-The search consists almost entirely of tight Python loops — iterating over move lists, indexing into 8×8 arrays, XORing 64-bit integers. These are exactly the patterns JIT compilation excels at. The speedup is **4–7×** with zero code changes — equivalent to gaining 1–2 extra depth levels for free, which compounds through every other feature.
-
-**The tradeoff:**
-PyPy doesn't support C-extension packages (notably Pygame), which necessitates the subprocess split. PyPy also has a longer startup time and a brief JIT warmup on the first few searches. For sustained play, the warmup cost is negligible.
-
----
-
-### 10. Texel Tuning (PST Optimisation)
-
-Texel tuning is a machine-learning method for optimising piece-square table values using real game data. Rather than setting PST values by hand, a PyTorch model treats every entry in every table as a learnable parameter and adjusts them to minimise prediction error across hundreds of thousands of evaluated positions.
-
-The model is intentionally simple — it is exactly the engine's `evaluate()` function expressed as a linear operation:
-
-```
-score = feature_vector @ weights
-```
-
-where `feature_vector` encodes which pieces are on which squares and `weights` are the 453 PST/piece-value parameters (7 tables × 64 squares + 5 piece values). Because the model is linear and matches the engine's eval exactly, PyTorch's gradients are exact — there is no approximation.
-
-The loss function maps centipawn scores into win-probability space via a sigmoid before comparing, which prevents large-score outliers from dominating training:
-
-```python
-pred_p   = torch.sigmoid(K * pred)
-target_p = torch.sigmoid(K * target)
-loss     = ((pred_p - target_p) ** 2).mean()
-```
-
-L2 regularisation is applied to PST weights only (not piece values) to prevent table entries from growing to unrealistic magnitudes.
-
-**Data sources:**
-Two separate datasets were generated and trained independently:
-
-- **Self-play** (`texel_generate.py`): Stockfish plays randomised games at depth 6, collecting ~200k quiet positions evaluated at depth 10.
-- **Lichess** (`texel_generate_lichess.py`): Streams a monthly Lichess PGN dump, filters to games above 1800 ELO, extracts quiet positions at regular intervals, and evaluates them with Stockfish.
-
-**Blending:**
-Rather than using one dataset's output directly, `constants.py` defines all three source tables explicitly — `HANDCRAFT_*`, `SELFPLAY_*`, `LICHESS_*` — and computes the final tables as a weighted blend at import time:
-
-```python
-PAWN_TABLE = _blend(HANDCRAFT_PAWN_TABLE, SELFPLAY_PAWN_TABLE, LICHESS_PAWN_TABLE,
-                    w_hand=0.25, w_self=0.375, w_lich=0.375)
-```
-
-Blend weights were chosen per-table based on the quality of each source. For example, both tuned rook tables showed the Lichess version correctly capturing 7th-rank and open-file bonuses while the self-play version was almost entirely negative (an overfitting artifact), so Lichess is weighted more heavily there. The king tables are hand-crafted only — king safety depends on pawn shelter and open files in a way that a context-free PST cannot encode, so the tuned versions were discarded.
-
-Hand-crafted PST values encode human intuition but miss subtleties that only emerge from large amounts of real game data. Texel tuning is a principled way to let the data refine the tables while keeping the evaluation function completely unchanged — no new features, no slower evaluation, just better numbers.
-
-**The tradeoff:**
-The tuning pipeline requires Stockfish, ~200k positions, and several hours of compute per dataset. The evaluation function itself is identical — there is no runtime cost at all. The blend approach also means the hand-crafted values act as an anchor, preventing the tuned data from introducing noise into tables where it performed poorly (notably king safety).
-
-**Running the pipeline:**
-
-```bash
-# Install dependencies
-pip install torch chess zstandard numpy
-
-# Generate self-play data (~2–3 hours)
-python texel_generate.py --stockfish "path/to/stockfish" --positions 200000
-
-# Or generate from a Lichess PGN dump (~2–3 hours)
-python texel_generate_lichess.py --pgn lichess_db_standard_rated_2017-02.pgn.zst \
-    --stockfish "path/to/stockfish" --positions 200000 --min-elo 1800
-
-# Train
-python texel_train.py --data texel_data.csv --epochs 2000 --lr 1.0 --l2 0.001
-```
-
-Lichess PGN dumps are available at [database.lichess.org](https://database.lichess.org). Stockfish binaries are available at [stockfishchess.org/download](https://stockfishchess.org/download/).
-
----
-
-## Dynamic Depth Scaling
-
-As pieces come off the board the search space shrinks, so `main.py` automatically increases depth in the endgame:
-
-```python
-if total_pieces <= 4:    depth = DEPTH + 5
-elif total_pieces <= 6:  depth = DEPTH + 4
-elif total_pieces <= 8:  depth = DEPTH + 3
-elif total_pieces <= 12: depth = DEPTH + 2
-elif total_pieces <= 20: depth = DEPTH + 1
-else:                    depth = DEPTH
-```
-
-With `DEPTH = 4`, this gives depth 9 in a K+P vs K endgame — enough to convert most theoretically won endings correctly.
-
----
-
-## Speed vs. Strength Summary
-
-| Feature | Speed Impact | ELO Added | Running Total |
-|---|---|---|---|
-| Depth-limited minimax (depth 5) | Baseline | ~600 | ~600 |
-| Move integer encoding | Negligible | — | ~600 |
-| Piece-square tables | ~1% slower | ~50 | ~650 |
-| Alpha-beta pruning | **~75% faster** | ~150 | ~800 |
-| Move ordering | **~45% faster** | ~100 | ~900 |
-| Quiescence search | ~30% slower | **~200** | ~1100 |
-| Transposition table | **~40% faster** | ~150 | ~1250 |
-| Iterative deepening | ~10% slower | ~75 | ~1325 |
-| PyPy JIT | **~5× faster** | ~150 | ~1475 |
-| Texel tuning | No runtime cost | ~50–100 | ~1550 |
-
----
-
-## Chess Rules Implemented
-
-- All piece movements (pawns, knights, bishops, rooks, queens, kings)
-- Pawn double push and en passant capture
-- Promotions to queen, rook, bishop, or knight
-- Kingside and queenside castling with per-side rights tracking
-- Check detection used to filter pseudo-legal moves
-- Checkmate and stalemate detection
-- Threefold repetition draw detection via Zobrist position history
-
----
-
-## Credits
-
-Piece images from [Wikimedia Commons](https://commons.wikimedia.org/wiki/Category:SVG_chess_pieces) — Colin M.L. Burnett, CC BY-SA 3.0. Downloaded automatically by `download_pieces.py`.
+## Further reading
+
+- [`FINDINGS.md`](FINDINGS.md) — performance numbers and endgame results from the tablebases
+- [`cuda/PROFILING.md`](cuda/PROFILING.md) — GPU optimization log and profiling
+- [`cloud/README.md`](cloud/README.md) — the multi-GPU + S3 generation pipeline
+- [`python/README.md`](python/README.md) — the original Python engine, feature by feature
+- `CLAUDE.md` — full design rationale and the complete command reference
