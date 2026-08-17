@@ -35,7 +35,7 @@ IMAGE="${TF_IMAGE:-hashicorp/terraform:latest}"
 
 args=(--rm
       -v "$WORKDIR":/work -w /work
-      -e AWS_PROFILE -e AWS_REGION -e AWS_DEFAULT_REGION)
+      -e AWS_PROFILE -e AWS_REGION -e AWS_DEFAULT_REGION -e RUNPOD_API_KEY)
 
 # Mount host AWS creds when present: needed for plan/apply, harmless for init.
 if [ -d "$HOME/.aws" ]; then

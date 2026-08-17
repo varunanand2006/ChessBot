@@ -1,0 +1,18 @@
+# Copy to terraform.tfvars and edit. All values have defaults.
+
+region      = "us-east-1"
+name_prefix = "chess-tb"
+bucket_name = ""        # empty auto-generates a unique name
+tb_prefix   = "v1"
+
+# The multi-GPU batch node.
+gpu_type_ids  = ["NVIDIA GeForce RTX 4090"]
+gpu_count     = 4
+cloud_type    = "COMMUNITY"   # or SECURE for better availability
+interruptible = false         # true = cheaper, reclaimable (batch is resumable)
+
+# Materials fanned across the GPUs (canonical names).
+materials = ["KQRKR", "KRBKN", "KBNKN", "KQBKR"]
+
+repo_url = "https://github.com/varunanand2006/ChessBot.git"
+repo_ref = "master"

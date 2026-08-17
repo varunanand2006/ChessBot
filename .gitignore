@@ -25,3 +25,17 @@ __pycache__/
 
 # --- Downloaded assets ---
 pieces/
+
+# --- Terraform (cloud/terraform) ---
+# Never commit provider caches or state; state can hold sensitive values and is
+# environment-specific. The .example tfvars is tracked; real tfvars are not.
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+terraform.tfvars
+*.auto.tfvars
+# Local provider mirror (large; regenerated with `terraform providers mirror`)
+cloud/terraform*/mirror/
+# Exported Windows/Norton CA bundle (machine-specific; regenerate per machine).
+cloud/win-roots.pem
