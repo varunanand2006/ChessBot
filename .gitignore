@@ -39,3 +39,6 @@ terraform.tfvars
 cloud/terraform*/mirror/
 # Exported Windows/Norton CA bundle (machine-specific; regenerate per machine).
 cloud/win-roots.pem
+# Generated tablebases downloaded from S3 (~11 GB; regenerable on the GPU, not
+# source). The engine loads them via CHESS_TB_DIR at runtime.
+cloud/tables/

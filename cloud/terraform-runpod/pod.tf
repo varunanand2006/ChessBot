@@ -35,7 +35,12 @@ resource "runpod_pod" "batch" {
     AWS_DEFAULT_REGION    = var.region
   }
 
-  # Bootstrap read from a file so the shell logic stays readable (and testable)
-  # instead of an inline HCL string. Its env-var references expand on the pod.
-  docker_start_cmd = ["bash", "-lc", file("${path.module}/pod_start.sh")]
+  # Boot to a stable idle container. Driving a finite batch through a Pod start
+  # command crash-loops: RunPod Pods expect a long-lived container, so when the
+  # bootstrap script exits (success OR failure) RunPod restarts it, with no
+  # visibility. Instead we idle here, then run the batch by hand in the RunPod
+  # web terminal with live output. TF still injects DEST/MATERIALS/AWS creds into
+  # `env` below, so the manual run just uses them. pod_start.sh holds the exact
+  # steps to paste (and is the basis for re-automating later, e.g. via serverless).
+  docker_start_cmd = ["sleep", "infinity"]
 }

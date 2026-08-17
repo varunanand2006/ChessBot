@@ -18,6 +18,11 @@ resource "random_id" "suffix" {
 resource "aws_s3_bucket" "tb" {
   bucket = local.bucket_name
   tags   = local.tags
+
+  # Let `terraform destroy` delete the bucket even with tables (and versions) in
+  # it. Without this, destroy fails "BucketNotEmpty" and you must empty it by hand
+  # first. Fine here: the tables are regenerable and downloaded before teardown.
+  force_destroy = true
 }
 
 resource "aws_s3_bucket_versioning" "tb" {
