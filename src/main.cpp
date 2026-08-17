@@ -13,10 +13,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
 #include "bitboard.hpp"
+#include "eval.hpp"
 #include "movegen.hpp"
 #include "perft.hpp"
 #include "position.hpp"
@@ -219,6 +221,15 @@ int run_tbload(int argc, char** argv) {
 // mover's own king) would happily "capture" the exposed king and then evaluate a
 // king-less board. Reject such FENs up front rather than crash.
 bool position_legal(const Position& pos) {
+    // Exactly one king per side. A malformed FEN with a missing (or duplicate)
+    // king otherwise reaches king_square()/evaluate(), which index a nonexistent
+    // king's square and read out of bounds -> segfault. Reject up front so the
+    // driver prints an error instead of crashing. (The attack test below assumes
+    // both kings exist, so this must come first.)
+    const Bitboard kings = pos.by_type[type_index(PieceType::King)];
+    if (popcount(kings & pos.by_color[color_index(Color::White)]) != 1) return false;
+    if (popcount(kings & pos.by_color[color_index(Color::Black)]) != 1) return false;
+
     const Square their_king = movegen::king_square(pos, ~pos.side_to_move);
     return !movegen::is_attacked(pos, their_king, pos.side_to_move);
 }
@@ -343,6 +354,22 @@ int run_play(int argc, char** argv) {
             return 0;
         }
 
+        // Draw claims — checked after mate/stalemate, which take precedence (a
+        // checkmating move ends the game even on the 50th move). Without these the
+        // driver's while(true) never terminates a game that can't be won: against
+        // the perfectly-defending tablebase, an inaccurate attacker just shuffles
+        // forever. history_add already ran for the position on the board, so its
+        // count includes the current occurrence; >= 3 is a threefold.
+        if (search::history_count(pos.zobrist) >= 3) {
+            std::printf("Draw by threefold repetition.\n");
+            return 0;
+        }
+        // 100 plies (50 full moves) with no pawn move or capture.
+        if (pos.halfmove_clock >= 100) {
+            std::printf("Draw by fifty-move rule.\n");
+            return 0;
+        }
+
         if (pos.side_to_move == Color::White) {
             std::printf("Your move (e2e4, promo e7e8q): ");
             std::fflush(stdout);
@@ -369,6 +396,162 @@ int run_play(int argc, char** argv) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// JSON API mode (`chess api`) — the backend for the web frontend.
+//
+// A persistent line protocol over stdin/stdout so the bridge server keeps ONE
+// engine process alive (magics/tables built once) instead of paying process
+// startup per move. Stateless per request: every command carries the FEN, so
+// undo/redo/history live entirely in the frontend and the engine is a pure
+// query service. One JSON object per line out; the caller reads line by line.
+//
+//   legal <fen...>         -> { ok, stm, check, status, eval_cp, moves:[...] }
+//   go <depth> <fen...>    -> { ok, bestmove, cp, mate, nodes, depth }
+//   quit                   -> exit
+//
+// `moves[]` carries, per legal move, its resulting FEN and a human note
+// ("Qd2-d5+", "exd5", "O-O", "e7-e8=Q#") so the frontend never re-implements
+// chess rules or notation — the perft-verified movegen is the single source.
+// ---------------------------------------------------------------------------
+std::string sq_name(Square s) {
+    std::string r;
+    r += static_cast<char>('a' + file_of(s));
+    r += static_cast<char>('1' + rank_of(s));
+    return r;
+}
+
+char piece_upper(PieceType t) {
+    switch (t) {
+        case PieceType::Pawn:   return 'P';
+        case PieceType::Knight: return 'N';
+        case PieceType::Bishop: return 'B';
+        case PieceType::Rook:   return 'R';
+        case PieceType::Queen:  return 'Q';
+        case PieceType::King:   return 'K';
+        default:                return '?';
+    }
+}
+
+// "What piece moved where, and was it a check" — from-to notation (no SAN
+// disambiguation needed): piece letter (omitted for pawns), from, '-'/'x', to,
+// '=' promo, then '+'/'#' if the move gives check/mate. `before` is the position
+// prior to the move (for the moving piece); the check/mate flags are computed by
+// the caller on the resulting position.
+std::string move_note(const Position& before, Move m, bool child_check, bool child_no_moves) {
+    const MoveFlag f = move_flag(m);
+    std::string s;
+    if (f == MoveFlag::KingCastle)       s = "O-O";
+    else if (f == MoveFlag::QueenCastle) s = "O-O-O";
+    else {
+        const Square from = move_from(m), to = move_to(m);
+        const PieceType pt = before.piece_type_on(from);
+        if (pt != PieceType::Pawn) s += piece_upper(pt);
+        s += sq_name(from);
+        s += is_capture(m) ? 'x' : '-';
+        s += sq_name(to);
+        if (is_promotion(m)) { s += '='; s += piece_upper(promotion_type(m)); }
+    }
+    if (child_check) s += child_no_moves ? '#' : '+';
+    return s;
+}
+
+int run_api() {
+    // FEN/notation values contain only spaces, '/', '-', '+', '#', '=', letters
+    // and digits — none of JSON's special characters — so they need no escaping;
+    // we wrap them in quotes directly.
+    std::string line;
+    while (std::getline(std::cin, line)) {
+        std::istringstream iss(line);
+        std::string cmd;
+        iss >> cmd;
+        if (cmd == "quit" || cmd == "exit") break;
+
+        if (cmd == "legal") {
+            std::string fen;
+            std::getline(iss, fen);
+            if (!fen.empty() && fen.front() == ' ') fen.erase(0, 1);
+            Position pos;
+            if (!set_fen(pos, fen) || !position_legal(pos)) {
+                std::printf("{\"ok\":false,\"error\":\"illegal position\"}\n");
+                std::fflush(stdout);
+                continue;
+            }
+            MoveList ml;
+            movegen::generate_legal(pos, ml);
+            const bool inchk = movegen::in_check(pos);
+            const char* status = ml.size() == 0 ? (inchk ? "checkmate" : "stalemate")
+                                                 : "normal";
+            std::string out = "{\"ok\":true,\"stm\":\"";
+            out += (pos.side_to_move == Color::White ? "w" : "b");
+            out += "\",\"check\":";
+            out += inchk ? "true" : "false";
+            out += ",\"status\":\"";
+            out += status;
+            out += "\",\"eval_cp\":";
+            out += std::to_string(eval::evaluate(pos));
+            out += ",\"moves\":[";
+            for (int i = 0; i < ml.size(); ++i) {
+                const Move m = ml[i];
+                StateInfo st;
+                make_move(pos, m, st);
+                const bool cchk = movegen::in_check(pos);
+                MoveList cml;
+                movegen::generate_legal(pos, cml);
+                const bool cno = cml.size() == 0;
+                const std::string cfen = to_fen(pos);
+                unmake_move(pos, m, st);
+                if (i) out += ",";
+                out += "{\"uci\":\"" + move_to_uci(m) + "\",\"from\":\"" + sq_name(move_from(m))
+                     + "\",\"to\":\"" + sq_name(move_to(m)) + "\",\"note\":\""
+                     + move_note(pos, m, cchk, cno) + "\",\"check\":" + (cchk ? "true" : "false")
+                     + ",\"fen\":\"" + cfen + "\"}";
+            }
+            out += "]}";
+            std::printf("%s\n", out.c_str());
+            std::fflush(stdout);
+
+        } else if (cmd == "go") {
+            int depth = 4;
+            iss >> depth;
+            std::string fen;
+            std::getline(iss, fen);
+            if (!fen.empty() && fen.front() == ' ') fen.erase(0, 1);
+            Position pos;
+            if (!set_fen(pos, fen) || !position_legal(pos)) {
+                std::printf("{\"ok\":false,\"error\":\"illegal position\"}\n");
+                std::fflush(stdout);
+                continue;
+            }
+            if (depth < 1) depth = 1;
+            // Stateless: seed a fresh game with just this position so the search
+            // has a valid (if minimal) history. Game-level repetition tracking is
+            // the frontend's job; this keeps the API a pure per-request function.
+            search::new_game();
+            search::history_add(pos.zobrist);
+            const search::SearchResult r = search::find_best_move(pos, depth, /*verbose=*/false);
+            // Mate-score decoding mirrors search.cpp's MATE = 99999: a |score|
+            // near MATE is a mate, distance-in-plies = MATE - |score|; report it
+            // in moves (rounded up). 0 mate means an ordinary centipawn score.
+            constexpr int MATE = 99'999;
+            int mate = 0;
+            if (r.score > MATE - 1000)       mate =  (MATE - r.score + 1) / 2;
+            else if (r.score < -(MATE - 1000)) mate = -((MATE + r.score + 1) / 2);
+            std::string out = "{\"ok\":true,\"bestmove\":\"" + move_to_uci(r.best_move)
+                            + "\",\"cp\":" + std::to_string(r.score)
+                            + ",\"mate\":" + std::to_string(mate)
+                            + ",\"nodes\":" + std::to_string(static_cast<unsigned long long>(r.nodes))
+                            + ",\"depth\":" + std::to_string(r.depth) + "}";
+            std::printf("%s\n", out.c_str());
+            std::fflush(stdout);
+
+        } else if (!cmd.empty()) {
+            std::printf("{\"ok\":false,\"error\":\"unknown command\"}\n");
+            std::fflush(stdout);
+        }
+    }
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -390,6 +573,7 @@ int main(int argc, char** argv) {
     if (argc >= 2 && std::strcmp(argv[1], "tbload") == 0) return run_tbload(argc, argv);
     if (argc >= 3 && std::strcmp(argv[1], "search") == 0) return run_search(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "play") == 0)   return run_play(argc, argv);
+    if (argc >= 2 && std::strcmp(argv[1], "api") == 0)    return run_api();
 
     std::printf("ChessEngine v0.1.0\n");
     std::printf("usage:\n");
@@ -401,5 +585,6 @@ int main(int argc, char** argv) {
     std::printf("  chess tbload <path> [FEN...]       load a .tb; probe a position if given\n");
     std::printf("  chess search <depth> [FEN...]      best move for a position\n");
     std::printf("  chess play   [depth] [FEN...]      play vs the engine (you are White)\n");
+    std::printf("  chess api                          JSON stdin/stdout service (web frontend)\n");
     return 0;
 }

@@ -43,6 +43,13 @@ void set_use_tablebase(bool on);
 // including the initial position) so the search can see threefold repetitions.
 void history_add(uint64_t key);
 
+// How many times `key` has occurred in the recorded game line (plus the current
+// search path, which is empty outside a search). The game driver uses this for
+// threefold-repetition claims: a value >= 3 means the position on the board now
+// is its third occurrence. Reuses the same history the search counts, so driver
+// and search agree on what a repetition is.
+int history_count(uint64_t key);
+
 // Iterative deepening to max_depth. `verbose` prints a per-depth line like the
 // Python root. The position is returned byte-identical (search unmakes all moves).
 SearchResult find_best_move(Position& pos, int max_depth, bool verbose = false);

@@ -86,12 +86,10 @@ bool maybe_probe(const Position& pos, int& white_score) {
     return true;
 }
 
-int history_count(uint64_t key) {
-    int n = 0;
-    for (int i = 0; i < g_ply; ++i) n += (g_path[i] == key);
-    for (const uint64_t k : g_played) n += (k == key);
-    return n;
-}
+// history_count moved to the public section below (declared in search.hpp) so
+// the game driver can share the same repetition count the search uses. It reads
+// the anonymous-namespace history state, which is visible from the enclosing
+// search namespace, so nothing else here changes.
 
 // Returns true and sets `out_score` when the stored bound is usable at this
 // depth/window. Always exposes the stored move (out_move) for ordering.
@@ -281,6 +279,13 @@ void new_game() {
 void set_use_tablebase(bool on) { g_use_tb = on; }
 
 void history_add(uint64_t key) { g_played.push_back(key); }
+
+int history_count(uint64_t key) {
+    int n = 0;
+    for (int i = 0; i < g_ply; ++i) n += (g_path[i] == key);
+    for (const uint64_t k : g_played) n += (k == key);
+    return n;
+}
 
 SearchResult find_best_move(Position& pos, int max_depth, bool verbose) {
     ensure_tt();  // safety if new_game() was not called

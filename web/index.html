@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Engine</title>
+<style>
+  /* Palette lifted from the pygame GUI (python/gui.py) so the board matches. */
+  :root{
+    --bg:#0e0e16; --panel:#161624; --border:#303044; --text:#d2c8b4;
+    --accent:#c49a64; --dim:#787062;
+    --light:#edd6b0; --dark:#b3855e;
+    --sel:#dcd237; --dot:#4b6932; --ring:#af3030; --check:#d22626;
+    --wpc:#f4efde; --bpc:#261e16;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:"Segoe UI",system-ui,sans-serif; min-height:100vh;
+    display:flex; align-items:flex-start; justify-content:center; gap:22px; padding:22px;
+    flex-wrap:wrap;
+  }
+  h1{font-size:20px; margin:0 0 2px; color:var(--accent); font-weight:600; letter-spacing:.3px}
+  .sub{font-size:12px; color:var(--dim); margin-bottom:14px}
+
+  .stage{display:flex; gap:12px; align-items:flex-start}
+
+  /* Evaluation bar */
+  .evalwrap{display:flex; flex-direction:column; align-items:center; gap:6px; width:34px}
+  .evalbar{
+    position:relative; width:26px; height:512px; border:1px solid var(--border);
+    border-radius:5px; overflow:hidden; background:var(--bpc);
+  }
+  .evalfill{position:absolute; left:0; bottom:0; width:100%; background:var(--wpc); transition:height .25s}
+  .evalnum{font-size:12px; font-variant-numeric:tabular-nums; color:var(--text); min-height:16px}
+  .evalhidden .evalfill{display:none}
+  .evalhidden .evalbar{background:repeating-linear-gradient(45deg,#1c1c2c,#1c1c2c 6px,#20203200 6px,#20203200 12px)}
+
+  /* Board */
+  .board{
+    width:512px; height:512px; display:grid;
+    grid-template-columns:repeat(8,1fr); grid-template-rows:repeat(8,1fr);
+    border:3px solid var(--border); border-radius:4px; overflow:hidden;
+    user-select:none;
+  }
+  .sq{position:relative; display:flex; align-items:center; justify-content:center; cursor:default}
+  .sq.light{background:var(--light)} .sq.dark{background:var(--dark)}
+  .sq.sel{box-shadow:inset 0 0 0 4px var(--sel)}
+  .sq.lastmove::after{content:""; position:absolute; inset:0; background:var(--sel); opacity:.28}
+  .sq.check{box-shadow:inset 0 0 0 4px var(--check)}
+  .piece{font-size:46px; line-height:1; z-index:2; cursor:grab}
+  .piece.w{color:var(--wpc); text-shadow:0 0 1px #000,0 1px 2px #0008}
+  .piece.b{color:var(--bpc); text-shadow:0 0 1px #fff6}
+  .dot{position:absolute; width:22%; height:22%; border-radius:50%; background:var(--dot); opacity:.8; z-index:1}
+  .dot.cap{width:82%; height:82%; background:none; border:5px solid var(--ring); opacity:.85; box-sizing:border-box}
+  .coord{position:absolute; font-size:10px; color:#0004; z-index:3}
+  .coord.f{right:3px; bottom:1px} .coord.r{left:3px; top:1px}
+  .light .coord{color:#0005} .dark .coord{color:#fff5}
+
+  /* Right panel */
+  .panel{width:290px; display:flex; flex-direction:column; gap:14px}
+  .card{background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:12px 14px}
+  .status{font-size:15px; min-height:20px}
+  .status .win{color:#8ed07a} .status .lose{color:var(--check)} .status .draw{color:var(--accent)}
+  .row{display:flex; gap:8px; flex-wrap:wrap}
+  button{
+    flex:1; background:#22223a; color:var(--text); border:1px solid var(--border);
+    border-radius:6px; padding:8px 10px; font-size:13px; cursor:pointer; transition:background .15s;
+  }
+  button:hover:not(:disabled){background:#2c2c48}
+  button:disabled{opacity:.4; cursor:not-allowed}
+  label.ctl{font-size:13px; display:flex; justify-content:space-between; align-items:center; margin-bottom:6px}
+  input[type=range]{width:100%; accent-color:var(--accent)}
+  .toggle{display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer}
+  .movelist{
+    height:250px; overflow-y:auto; font-size:13px; font-variant-numeric:tabular-nums;
+    line-height:1.7; background:#12121e; border:1px solid var(--border); border-radius:6px; padding:6px 8px;
+  }
+  .mv{display:grid; grid-template-columns:34px 1fr 1fr; gap:2px}
+  .mv .n{color:var(--dim)}
+  .mv span.ply{padding:1px 5px; border-radius:4px; cursor:pointer}
+  .mv span.ply:hover{background:#22223a}
+  .mv span.ply.cur{background:var(--accent); color:#1a1206; font-weight:600}
+  .meta{font-size:11px; color:var(--dim); text-align:center}
+</style>
+</head>
+<body>
+<div>
+  <h1>Chess Engine</h1>
+  <div class="sub">You play White. The engine (C++/Texel eval + alpha-beta) plays Black.</div>
+  <div class="stage">
+    <div class="evalwrap" id="evalwrap">
+      <div class="evalnum" id="evalnum">0.0</div>
+      <div class="evalbar"><div class="evalfill" id="evalfill" style="height:50%"></div></div>
+      <div class="evalnum" style="color:var(--dim)">eval</div>
+    </div>
+    <div class="board" id="board"></div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="card"><div class="status" id="status">Loading…</div></div>
+
+  <div class="card">
+    <label class="ctl"><span>Strength (search depth)</span><b id="depthval">3</b></label>
+    <input type="range" id="depth" min="1" max="8" value="3">
+    <div class="meta">higher = stronger &amp; slower</div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <button id="undo">◀ Undo</button>
+      <button id="redo">Redo ▶</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="newgame">New game</button>
+    </div>
+    <label class="toggle" style="margin-top:10px">
+      <input type="checkbox" id="evaltoggle" checked> Show evaluation
+    </label>
+  </div>
+
+  <div class="card">
+    <div style="font-size:12px; color:var(--dim); margin-bottom:6px">Moves</div>
+    <div class="movelist" id="movelist"></div>
+  </div>
+</div>
+
+<script>
+const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+const GLYPH = {k:'♚',q:'♛',r:'♜',b:'♝',n:'♞',p:'♟'};
+
+// ---- game state (all history/undo/redo lives here; engine is stateless) ----
+let history = [];      // [{fen, note, uci}]  index 0 = start
+let ptr = 0;           // index of the position currently shown
+let humanColor = 'w';  // side to move in the start position
+let cur = null;        // engine `legal` result for history[ptr].fen (moves/eval/status)
+let sel = null;        // selected from-square
+let thinking = false;
+
+const $ = id => document.getElementById(id);
+
+async function api(cmd, fen, depth){
+  const r = await fetch('/api', {method:'POST', headers:{'Content-Type':'application/json'},
+                                 body:JSON.stringify({cmd, fen, depth})});
+  return r.json();
+}
+
+// FEN helpers
+const placement = f => f.split(' ')[0];
+const stmOf     = f => f.split(' ')[1];
+const halfmove  = f => parseInt(f.split(' ')[4] || '0', 10);
+const posKey    = f => f.split(' ').slice(0,4).join(' ');  // for threefold
+
+function boardArray(fen){
+  const rows = placement(fen).split('/');
+  const g = [];
+  for (const row of rows){
+    const line = [];
+    for (const ch of row){
+      if (ch >= '1' && ch <= '8') for (let i=0;i<+ch;i++) line.push('');
+      else line.push(ch);
+    }
+    g.push(line);
+  }
+  return g;  // g[0] = rank 8 ... g[7] = rank 1
+}
+
+// terminal state for the position at index i (needs cur for engine status of the tip)
+function terminal(i){
+  const fen = history[i].fen;
+  if (i === ptr && cur){
+    if (cur.status === 'checkmate') return {over:true, kind:'checkmate'};
+    if (cur.status === 'stalemate') return {over:true, kind:'stalemate'};
+  }
+  // threefold: this position's key seen 3+ times up to here
+  const key = posKey(fen);
+  let n = 0;
+  for (let j=0;j<=i;j++) if (posKey(history[j].fen) === key) n++;
+  if (n >= 3) return {over:true, kind:'threefold'};
+  if (halfmove(fen) >= 100) return {over:true, kind:'fifty'};
+  return {over:false};
+}
+
+function render(){
+  const fen = history[ptr].fen;
+  const g = boardArray(fen);
+  const last = history[ptr].uci;  // e.g. "e2e4"
+  const lastFrom = last ? last.slice(0,2) : null, lastTo = last ? last.slice(2,4) : null;
+  const inCheck = cur && cur.check;
+  const stm = stmOf(fen);
+
+  // find the king square to flag when in check
+  let checkSq = null;
+  if (inCheck){
+    const kc = stm === 'w' ? 'K' : 'k';
+    for (let r=0;r<8;r++) for (let f=0;f<8;f++)
+      if (g[r][f] === kc) checkSq = 'abcdefgh'[f] + (8-r);
+  }
+
+  const dests = new Set();
+  if (sel && cur) for (const m of cur.moves) if (m.from === sel) dests.add(m.to);
+
+  const board = $('board');
+  board.innerHTML = '';
+  for (let r=0;r<8;r++){
+    for (let f=0;f<8;f++){
+      const name = 'abcdefgh'[f] + (8-r);
+      const light = (r+f)%2 === 0;
+      const sq = document.createElement('div');
+      sq.className = 'sq ' + (light?'light':'dark');
+      sq.dataset.sq = name;
+      if (name === sel) sq.classList.add('sel');
+      if (name === lastFrom || name === lastTo) sq.classList.add('lastmove');
+      if (name === checkSq) sq.classList.add('check');
+
+      if (f === 0){ const c=document.createElement('div'); c.className='coord r'; c.textContent=8-r; sq.appendChild(c); }
+      if (r === 7){ const c=document.createElement('div'); c.className='coord f'; c.textContent='abcdefgh'[f]; sq.appendChild(c); }
+
+      const pc = g[r][f];
+      if (pc){
+        const p = document.createElement('div');
+        const white = pc === pc.toUpperCase();
+        p.className = 'piece ' + (white?'w':'b');
+        p.textContent = GLYPH[pc.toLowerCase()];
+        sq.appendChild(p);
+      }
+      if (dests.has(name)){
+        const d = document.createElement('div');
+        d.className = 'dot' + (pc ? ' cap' : '');
+        sq.appendChild(d);
+      }
+      sq.addEventListener('click', () => onSquare(name));
+      board.appendChild(sq);
+    }
+  }
+
+  renderEval();
+  renderStatus();
+  renderMoves();
+  $('undo').disabled = thinking || ptr === 0;
+  $('redo').disabled = thinking || ptr >= history.length - 1;
+}
+
+function renderEval(){
+  const shown = $('evaltoggle').checked;
+  $('evalwrap').classList.toggle('evalhidden', !shown);
+  if (!shown){ $('evalnum').textContent = '···'; return; }
+  let cp = cur ? cur.eval_cp : 0;
+  const pawns = (cp/100);
+  $('evalnum').textContent = (pawns>=0?'+':'') + pawns.toFixed(1);
+  // squashed fill: clamp to +-10 pawns
+  const clamped = Math.max(-1000, Math.min(1000, cp));
+  const pctWhite = 50 + (clamped/1000)*48;   // 2%..98%
+  $('evalfill').style.height = pctWhite + '%';
+}
+
+function renderStatus(){
+  const el = $('status');
+  const t = terminal(ptr);
+  const stm = stmOf(history[ptr].fen);
+  if (t.over){
+    if (t.kind === 'checkmate'){
+      const winner = stm === 'w' ? 'Black' : 'White';
+      const youWin = (stm !== humanColor);
+      el.innerHTML = `<span class="${youWin?'win':'lose'}">Checkmate — ${winner} wins.</span>`;
+    } else if (t.kind === 'stalemate') el.innerHTML = '<span class="draw">Stalemate — draw.</span>';
+    else if (t.kind === 'threefold') el.innerHTML = '<span class="draw">Draw by threefold repetition.</span>';
+    else if (t.kind === 'fifty')     el.innerHTML = '<span class="draw">Draw by the fifty-move rule.</span>';
+    return;
+  }
+  if (thinking){ el.textContent = 'Engine thinking…'; return; }
+  const who = stm === humanColor ? 'Your move' : 'Engine to move';
+  const chk = cur && cur.check ? ' — check!' : '';
+  const review = ptr < history.length-1 ? '  (reviewing)' : '';
+  el.textContent = who + chk + review;
+}
+
+function renderMoves(){
+  const ml = $('movelist');
+  ml.innerHTML = '';
+  // plies are history[1..]; mover of ply i is the side to move in history[i-1]
+  let row = null;
+  for (let i=1;i<history.length;i++){
+    const moverWhite = stmOf(history[i-1].fen) === 'w';
+    const num = Math.floor((i-1)/2) + 1;
+    if (moverWhite){
+      row = document.createElement('div'); row.className='mv';
+      const n=document.createElement('span'); n.className='n'; n.textContent=num+'.'; row.appendChild(n);
+      const w=document.createElement('span'); w.className='ply'; w.dataset.i=i; w.textContent=history[i].note||'';
+      if (i===ptr) w.classList.add('cur'); w.onclick=()=>jump(i); row.appendChild(w);
+      const b=document.createElement('span'); row.appendChild(b);  // placeholder for black
+      ml.appendChild(row);
+    } else {
+      if (!row){ row=document.createElement('div'); row.className='mv';
+        const n=document.createElement('span'); n.className='n'; n.textContent=num+'.'; row.appendChild(n);
+        row.appendChild(document.createElement('span')); ml.appendChild(row); }
+      const b=document.createElement('span'); b.className='ply'; b.dataset.i=i; b.textContent=history[i].note||'';
+      if (i===ptr) b.classList.add('cur'); b.onclick=()=>jump(i);
+      row.replaceChild(b, row.children[2]);
+      row = null;
+    }
+  }
+  ml.scrollTop = ml.scrollHeight;
+}
+
+// ---- interaction ----
+function onSquare(name){
+  if (thinking) return;
+  const t = terminal(ptr);
+  if (t.over) return;
+  const fen = history[ptr].fen;
+  if (stmOf(fen) !== humanColor) return;        // not your turn
+  if (!cur) return;
+
+  if (sel){
+    // try to move sel -> name
+    const cands = cur.moves.filter(m => m.from === sel && m.to === name);
+    if (cands.length){
+      // auto-queen on promotion (uci ends in a promo letter)
+      let mv = cands.find(m => m.uci.length === 5 ? m.uci[4]==='q' : true) || cands[0];
+      sel = null;
+      playHuman(mv);
+      return;
+    }
+  }
+  // (re)select if the square holds one of our pieces with legal moves
+  if (cur.moves.some(m => m.from === name)){ sel = (sel===name?null:name); render(); }
+  else { sel = null; render(); }
+}
+
+async function playHuman(mv){
+  // truncate any redo tail, append the human ply
+  history = history.slice(0, ptr+1);
+  history.push({fen: mv.fen, note: mv.note, uci: mv.uci});
+  ptr = history.length - 1;
+  await sync();                 // refresh cur for the new (engine-to-move) position
+  const t = terminal(ptr);
+  if (!t.over && stmOf(history[ptr].fen) !== humanColor) await botMove();
+}
+
+async function botMove(){
+  thinking = true; sel = null; render();
+  const fen = history[ptr].fen;
+  const depth = +$('depth').value;
+  const res = await api('go', fen, depth);
+  thinking = false;
+  if (!res.ok){ render(); return; }
+  // map the engine's bestmove to the legal entry we already have (cur = this fen)
+  const mv = cur.moves.find(m => m.uci === res.bestmove);
+  if (!mv){ render(); return; }
+  history.push({fen: mv.fen, note: mv.note, uci: mv.uci});
+  ptr = history.length - 1;
+  await sync();                 // refresh cur for the resulting (your-move) position
+}
+
+// fetch `legal` for the current position -> cur, then render
+async function sync(){
+  const fen = history[ptr].fen;
+  const res = await api('legal', fen);
+  cur = res.ok ? res : {moves:[], eval_cp:0, status:'normal', check:false, stm:stmOf(fen)};
+  render();
+}
+
+function jump(i){ if (thinking) return; sel=null; ptr=i; sync(); }
+
+function undo(){ if (thinking||ptr===0) return; sel=null;
+  let i = ptr-1; while (i>0 && stmOf(history[i].fen)!==humanColor) i--;   // land on your turn
+  ptr = i; sync(); }
+function redo(){ if (thinking||ptr>=history.length-1) return; sel=null;
+  let i = ptr+1; while (i<history.length-1 && stmOf(history[i].fen)!==humanColor) i++;
+  ptr = i; sync(); }
+
+function newGame(){
+  history = [{fen: START, note:null, uci:null}];
+  ptr = 0; humanColor = stmOf(START); sel = null; thinking = false;
+  sync();
+}
+
+// ---- wire up controls ----
+$('depth').addEventListener('input', e => $('depthval').textContent = e.target.value);
+$('evaltoggle').addEventListener('change', renderEval);
+$('undo').addEventListener('click', undo);
+$('redo').addEventListener('click', redo);
+$('newgame').addEventListener('click', newGame);
+
+newGame();
+</script>
+</body>
+</html>
