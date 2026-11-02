@@ -124,4 +124,4 @@ destroyed with the rest.
 
 The worker handles distinct-piece pawnless materials up to 5 pieces (the set the
 combinatorial indexer and GPU sweep cover). Duplicate-piece materials (KRR vs. K)
-and pawns are out of scope; see the roadmap in the top-level `CLAUDE.md`.
+and pawns are out of scope; see the roadmap in [`../docs/DESIGN.md`](../docs/DESIGN.md).

@@ -184,8 +184,9 @@ ctest --test-dir build -E perft_deep
 
 The correctness story is that the GPU code is a `__host__ __device__` port of the
 verified CPU code: every device stage is diffed against the CPU oracle on the host
-(no GPU needed) before it's trusted on hardware. `CLAUDE.md` has the exhaustive
-command list; [`cuda/ROADMAP.md`](cuda/ROADMAP.md) has the phase-by-phase gates.
+(no GPU needed) before it's trusted on hardware.
+[`docs/COMMANDS.md`](docs/COMMANDS.md) has the exhaustive command list;
+[`cuda/ROADMAP.md`](cuda/ROADMAP.md) has the phase-by-phase gates.
 
 ## Repo layout
 
@@ -206,4 +207,5 @@ python/      the original Python engine — preserved as the project's origin
 - [`cuda/PROFILING.md`](cuda/PROFILING.md) — GPU optimization log and profiling
 - [`cloud/README.md`](cloud/README.md) — the multi-GPU + S3 generation pipeline
 - [`python/README.md`](python/README.md) — the original Python engine, feature by feature
-- `CLAUDE.md` — full design rationale and the complete command reference
+- [`docs/DESIGN.md`](docs/DESIGN.md) — architecture and the design-decision rationale
+- [`docs/COMMANDS.md`](docs/COMMANDS.md) — the complete command reference

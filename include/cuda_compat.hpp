@@ -2,7 +2,7 @@
 // of headers compile for BOTH the CPU engine and the CUDA device.
 //
 // WHY: the project is deliberately a single C++ dialect across host and device
-// (see CLAUDE.md) so the tablebase index arithmetic, D4 symmetry, and magic
+// (see docs/DESIGN.md) so the tablebase index arithmetic, D4 symmetry, and magic
 // sliders port to the GPU *verbatim* rather than being re-implemented. The only
 // thing device code needs that host code does not is the `__host__ __device__`
 // annotation on shared functions. This macro supplies it under nvcc and expands
