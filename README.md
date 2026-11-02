@@ -23,11 +23,11 @@ python web/server.py                       # serves the web UI at :8000
 
 Open **http://localhost:8000** and play (you are White). The browser UI has a
 click-to-move board, a live evaluation bar you can hide, undo/redo, a move list,
-and a strength slider that sets the engine's search depth — all served by one C++
+a strength slider that sets the engine's search depth, and a FEN box to load any
+position and play either side (or watch engine vs engine) — all served by one C++
 process behind a ~120-line standard-library Python bridge.
 
-<!-- Screenshot: drop an image at docs/web-ui.png and uncomment the line below.
-<p align="center"><img src="docs/web-ui.png" alt="Web UI" width="720"></p> -->
+<p align="center"><img src="docs/web-ui.png" alt="Web UI: board, evaluation bar, strength slider and move list" width="720"></p>
 
 To make the engine play **perfect endgames**, point it at a directory of
 generated `.tb` tablebase files — it then probes them instead of guessing:
@@ -35,6 +35,10 @@ generated `.tb` tablebase files — it then probes them instead of guessing:
 ```bash
 CHESS_TB_DIR=/path/to/tables python web/server.py
 ```
+
+The UI then shows the exact tablebase result ("White mates in 35") and how many
+nodes the engine searched for each move. `chess tbload <MATERIAL>.tb` prints each
+table's deepest-mate positions as FENs, ready to paste into the UI.
 
 Prefer the terminal? `./build/chess.exe play 4` plays a game in the console at
 depth 4.
@@ -204,6 +208,7 @@ python/      the original Python engine — preserved as the project's origin
 ## Further reading
 
 - [`FINDINGS.md`](FINDINGS.md) — performance numbers and endgame results from the tablebases
+- [`docs/demo/visuals.html`](docs/demo/visuals.html) — four figures for presenting the project: a live retrograde-analysis animation, the kernel optimization steps, the pipeline, and solve time at scale (PNG exports alongside)
 - [`cuda/PROFILING.md`](cuda/PROFILING.md) — GPU optimization log and profiling
 - [`cloud/README.md`](cloud/README.md) — the multi-GPU + S3 generation pipeline
 - [`python/README.md`](python/README.md) — the original Python engine, feature by feature

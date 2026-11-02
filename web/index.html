@@ -12,6 +12,7 @@
     --light:#edd6b0; --dark:#b3855e;
     --sel:#dcd237; --dot:#4b6932; --ring:#af3030; --check:#d22626;
     --wpc:#f4efde; --bpc:#261e16;
+    --good:#8ed07a;
   }
   *{box-sizing:border-box}
   body{
@@ -32,7 +33,7 @@
     border-radius:5px; overflow:hidden; background:var(--bpc);
   }
   .evalfill{position:absolute; left:0; bottom:0; width:100%; background:var(--wpc); transition:height .25s}
-  .evalnum{font-size:12px; font-variant-numeric:tabular-nums; color:var(--text); min-height:16px}
+  .evalnum{font-size:12px; font-variant-numeric:tabular-nums; color:var(--text); min-height:16px; white-space:nowrap}
   .evalhidden .evalfill{display:none}
   .evalhidden .evalbar{background:repeating-linear-gradient(45deg,#1c1c2c,#1c1c2c 6px,#20203200 6px,#20203200 12px)}
 
@@ -57,11 +58,23 @@
   .coord.f{right:3px; bottom:1px} .coord.r{left:3px; top:1px}
   .light .coord{color:#0005} .dark .coord{color:#fff5}
 
+  /* Position (FEN) bar under the board */
+  .fenbar{margin:14px 0 0 46px; width:512px; display:flex; flex-direction:column; gap:8px}
+  .fenrow{display:flex; gap:8px}
+  .fenrow input[type=text], .fenrow select{
+    flex:1; min-width:0; background:#12121e; color:var(--text); border:1px solid var(--border);
+    border-radius:6px; padding:8px 10px; font-size:12px;
+    font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
+  }
+  .fenrow select{font-family:inherit; font-size:13px}
+  .fenrow button{flex:0 0 auto}
+  .fenerr{font-size:12px; color:var(--check); min-height:15px}
+
   /* Right panel */
-  .panel{width:290px; display:flex; flex-direction:column; gap:14px}
+  .panel{width:300px; display:flex; flex-direction:column; gap:14px}
   .card{background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:12px 14px}
   .status{font-size:15px; min-height:20px}
-  .status .win{color:#8ed07a} .status .lose{color:var(--check)} .status .draw{color:var(--accent)}
+  .status .win{color:var(--good)} .status .lose{color:var(--check)} .status .draw{color:var(--accent)}
   .row{display:flex; gap:8px; flex-wrap:wrap}
   button{
     flex:1; background:#22223a; color:var(--text); border:1px solid var(--border);
@@ -69,11 +82,16 @@
   }
   button:hover:not(:disabled){background:#2c2c48}
   button:disabled{opacity:.4; cursor:not-allowed}
+  button.primary{background:#3a2c1a; border-color:var(--accent); color:#f0d8b0}
   label.ctl{font-size:13px; display:flex; justify-content:space-between; align-items:center; margin-bottom:6px}
   input[type=range]{width:100%; accent-color:var(--accent)}
   .toggle{display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer}
+  select.side{
+    width:100%; background:#12121e; color:var(--text); border:1px solid var(--border);
+    border-radius:6px; padding:7px 8px; font-size:13px;
+  }
   .movelist{
-    height:250px; overflow-y:auto; font-size:13px; font-variant-numeric:tabular-nums;
+    height:200px; overflow-y:auto; font-size:13px; font-variant-numeric:tabular-nums;
     line-height:1.7; background:#12121e; border:1px solid var(--border); border-radius:6px; padding:6px 8px;
   }
   .mv{display:grid; grid-template-columns:34px 1fr 1fr; gap:2px}
@@ -82,12 +100,22 @@
   .mv span.ply:hover{background:#22223a}
   .mv span.ply.cur{background:var(--accent); color:#1a1206; font-weight:600}
   .meta{font-size:11px; color:var(--dim); text-align:center}
+  .label{font-size:12px; color:var(--dim); margin-bottom:6px; display:flex; justify-content:space-between; align-items:center}
+
+  /* Tablebase card */
+  .pill{font-size:10px; letter-spacing:.6px; padding:2px 7px; border-radius:99px; border:1px solid var(--border); color:var(--dim)}
+  .pill.on{border-color:var(--good); color:var(--good)}
+  .tbresult{font-size:18px; font-weight:600; margin:2px 0}
+  .tbresult.win{color:var(--good)} .tbresult.draw{color:var(--accent)}
+  .tbnote{font-size:12px; color:var(--dim); line-height:1.5}
+  .searchline{font-size:12px; color:var(--text); margin-top:8px; padding-top:8px; border-top:1px solid var(--border); font-variant-numeric:tabular-nums}
+  .searchline b{color:var(--accent); font-weight:600}
 </style>
 </head>
 <body>
 <div>
   <h1>Chess Engine</h1>
-  <div class="sub">You play White. The engine (C++/Texel eval + alpha-beta) plays Black.</div>
+  <div class="sub" id="sub">You play White. The engine (C++/Texel eval + alpha-beta) plays Black.</div>
   <div class="stage">
     <div class="evalwrap" id="evalwrap">
       <div class="evalnum" id="evalnum">0.0</div>
@@ -96,13 +124,40 @@
     </div>
     <div class="board" id="board"></div>
   </div>
+  <div class="fenbar">
+    <div class="fenrow">
+      <select id="preset" aria-label="Preset positions"></select>
+    </div>
+    <div class="fenrow">
+      <input type="text" id="fen" spellcheck="false" autocomplete="off" aria-label="FEN"
+             placeholder="Paste a FEN and press Load">
+      <button id="loadfen" class="primary">Load</button>
+      <button id="copyfen" title="Copy the current position's FEN">Copy</button>
+    </div>
+    <div class="fenerr" id="fenerr"></div>
+  </div>
 </div>
 
 <div class="panel">
   <div class="card"><div class="status" id="status">Loading…</div></div>
 
+  <div class="card" id="tbcard">
+    <div class="label"><span>Endgame tablebase</span><span class="pill" id="tbpill">OFF</span></div>
+    <div id="tbbody"></div>
+    <div class="searchline" id="searchline">Last engine move: —</div>
+  </div>
+
   <div class="card">
-    <label class="ctl"><span>Strength (search depth)</span><b id="depthval">3</b></label>
+    <div class="label"><span>You play</span></div>
+    <select class="side" id="side">
+      <option value="w">White</option>
+      <option value="b">Black</option>
+      <option value="auto">Neither — engine vs engine</option>
+    </select>
+    <div class="row" id="autorow" style="margin-top:8px; display:none">
+      <button id="autoplay" class="primary">▶ Play</button>
+    </div>
+    <label class="ctl" style="margin-top:12px"><span>Strength (search depth)</span><b id="depthval">3</b></label>
     <input type="range" id="depth" min="1" max="8" value="3">
     <div class="meta">higher = stronger &amp; slower</div>
   </div>
@@ -118,10 +173,13 @@
     <label class="toggle" style="margin-top:10px">
       <input type="checkbox" id="evaltoggle" checked> Show evaluation
     </label>
+    <label class="toggle" style="margin-top:6px" title="Tablebase mates can run past 50 moves without a capture; turn this off to watch them to the end.">
+      <input type="checkbox" id="fifty" checked> Enforce the 50-move rule
+    </label>
   </div>
 
   <div class="card">
-    <div style="font-size:12px; color:var(--dim); margin-bottom:6px">Moves</div>
+    <div class="label"><span>Moves</span></div>
     <div class="movelist" id="movelist"></div>
   </div>
 </div>
@@ -130,15 +188,30 @@
 const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const GLYPH = {k:'♚',q:'♛',r:'♜',b:'♝',n:'♞',p:'♟'};
 
+// Demo positions. The <=4-piece ones work whenever CHESS_TB_DIR is set (the
+// engine builds those tables in RAM on first probe). For 5-piece positions, run
+// `chess tbload <dir>/<MATERIAL>.tb` on the machine that holds the tables; it
+// prints the deepest-mate FENs to paste here.
+const PRESETS = [
+  {name:'Standard starting position', fen:START},
+  {name:'KR vs K: deepest mate (mate in 16)', fen:'8/8/8/8/8/2k5/1R6/K7 w - - 0 1'},
+  {name:'KQ vs KR: deepest mate (mate in 35)', fen:'8/8/8/8/2r5/8/2k5/K6Q w - - 0 1'},
+];
+
 // ---- game state (all history/undo/redo lives here; engine is stateless) ----
 let history = [];      // [{fen, note, uci}]  index 0 = start
 let ptr = 0;           // index of the position currently shown
-let humanColor = 'w';  // side to move in the start position
-let cur = null;        // engine `legal` result for history[ptr].fen (moves/eval/status)
+let mode = 'w';        // who the human plays: 'w' | 'b' | 'auto' (engine vs engine)
+let running = false;   // engine-vs-engine: playing or paused
+let cur = null;        // engine `legal` result for history[ptr].fen (moves/eval/status/tb)
 let sel = null;        // selected from-square
 let thinking = false;
+let looping = false;   // maybeEngine() in progress
+let gen = 0;           // bumped on new game / load, so stale engine replies are dropped
+let lastSearch = null; // {nodes, ms, depth, tb} for the engine's most recent move
 
 const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function api(cmd, fen, depth){
   const r = await fetch('/api', {method:'POST', headers:{'Content-Type':'application/json'},
@@ -150,7 +223,19 @@ async function api(cmd, fen, depth){
 const placement = f => f.split(' ')[0];
 const stmOf     = f => f.split(' ')[1];
 const halfmove  = f => parseInt(f.split(' ')[4] || '0', 10);
+const fullmove  = f => parseInt(f.split(' ')[5] || '1', 10);
 const posKey    = f => f.split(' ').slice(0,4).join(' ');  // for threefold
+const colorName = c => c === 'w' ? 'White' : 'Black';
+const isHumanTurn = fen => mode !== 'auto' && stmOf(fen) === mode;
+
+// Accept FENs with missing trailing fields ("... w" or "... w -") and fill defaults.
+function normalizeFen(s){
+  const p = s.trim().split(/\s+/);
+  if (!p[0]) return null;
+  const d = ['', 'w', '-', '-', '0', '1'];
+  for (let i = p.length; i < 6; i++) p.push(d[i]);
+  return p.slice(0, 6).join(' ');
+}
 
 function boardArray(fen){
   const rows = placement(fen).split('/');
@@ -178,8 +263,18 @@ function terminal(i){
   let n = 0;
   for (let j=0;j<=i;j++) if (posKey(history[j].fen) === key) n++;
   if (n >= 3) return {over:true, kind:'threefold'};
-  if (halfmove(fen) >= 100) return {over:true, kind:'fifty'};
+  if ($('fifty').checked && halfmove(fen) >= 100) return {over:true, kind:'fifty'};
   return {over:false};
+}
+
+// Tablebase result from White's point of view: {draw} or {winner, moves, plies}.
+function tbView(){
+  if (!cur || !cur.tb) return null;
+  const {wdl, dtm} = cur.tb;
+  if (wdl === 0) return {draw:true};
+  const stm = stmOf(history[ptr].fen);
+  const winner = (wdl > 0) === (stm === 'w') ? 'w' : 'b';
+  return {winner, moves: Math.ceil(dtm / 2), plies: dtm};
 }
 
 function render(){
@@ -235,17 +330,27 @@ function render(){
     }
   }
 
+  // keep the FEN box showing the current position unless the user is typing in it
+  if (document.activeElement !== $('fen')) $('fen').value = fen;
+
   renderEval();
   renderStatus();
+  renderTablebase();
   renderMoves();
-  $('undo').disabled = thinking || ptr === 0;
-  $('redo').disabled = thinking || ptr >= history.length - 1;
+  renderControls();
 }
 
 function renderEval(){
   const shown = $('evaltoggle').checked;
   $('evalwrap').classList.toggle('evalhidden', !shown);
   if (!shown){ $('evalnum').textContent = '···'; return; }
+  const tv = tbView();
+  if (tv){  // exact result: show the mate distance, pin the bar to the winner
+    if (tv.draw){ $('evalnum').textContent = '0.0'; $('evalfill').style.height = '50%'; return; }
+    $('evalnum').textContent = tv.plies === 0 ? '#' : (tv.winner === 'w' ? '+M' : '-M') + tv.moves;
+    $('evalfill').style.height = tv.winner === 'w' ? '98%' : '2%';
+    return;
+  }
   let cp = cur ? cur.eval_cp : 0;
   const pawns = (cp/100);
   $('evalnum').textContent = (pawns>=0?'+':'') + pawns.toFixed(1);
@@ -262,18 +367,50 @@ function renderStatus(){
   if (t.over){
     if (t.kind === 'checkmate'){
       const winner = stm === 'w' ? 'Black' : 'White';
-      const youWin = (stm !== humanColor);
-      el.innerHTML = `<span class="${youWin?'win':'lose'}">Checkmate — ${winner} wins.</span>`;
+      const cls = mode === 'auto' ? 'win' : (stm !== mode ? 'win' : 'lose');
+      el.innerHTML = `<span class="${cls}">Checkmate — ${winner} wins.</span>`;
     } else if (t.kind === 'stalemate') el.innerHTML = '<span class="draw">Stalemate — draw.</span>';
     else if (t.kind === 'threefold') el.innerHTML = '<span class="draw">Draw by threefold repetition.</span>';
     else if (t.kind === 'fifty')     el.innerHTML = '<span class="draw">Draw by the fifty-move rule.</span>';
     return;
   }
   if (thinking){ el.textContent = 'Engine thinking…'; return; }
-  const who = stm === humanColor ? 'Your move' : 'Engine to move';
   const chk = cur && cur.check ? ' — check!' : '';
   const review = ptr < history.length-1 ? '  (reviewing)' : '';
+  let who;
+  if (mode === 'auto') who = colorName(stm) + ' to move' + (running ? '' : ' — paused');
+  else who = stm === mode ? 'Your move' : 'Engine to move';
   el.textContent = who + chk + review;
+}
+
+function renderTablebase(){
+  const on = !!(cur && cur.tb_enabled);
+  $('tbpill').textContent = on ? 'ON' : 'OFF';
+  $('tbpill').classList.toggle('on', on);
+  const body = $('tbbody');
+  const tv = tbView();
+  if (!on){
+    body.innerHTML = '<div class="tbnote">Tablebases are off. Start the server with ' +
+      '<code>CHESS_TB_DIR=&lt;dir&gt;</code> for perfect endgame play.</div>';
+  } else if (!tv){
+    const men = placement(history[ptr].fen).replace(/[^a-zA-Z]/g, '').length;
+    body.innerHTML = `<div class="tbnote">Not a tablebase position (${men} pieces). ` +
+      'The engine is searching with its heuristic evaluation.</div>';
+  } else if (tv.draw){
+    body.innerHTML = '<div class="tbresult draw">Draw with best play</div>' +
+      '<div class="tbnote">Exact result from the tablebase: the defender can hold.</div>';
+  } else if (tv.plies === 0){
+    body.innerHTML = `<div class="tbresult win">Checkmate — ${colorName(tv.winner)} wins</div>` +
+      '<div class="tbnote">The tablebase line has been played out to the end.</div>';
+  } else {
+    body.innerHTML = `<div class="tbresult win">${colorName(tv.winner)} mates in ${tv.moves}</div>` +
+      `<div class="tbnote">Exact result from the tablebase · ${tv.plies} plies with perfect play on both sides.</div>`;
+  }
+  const s = lastSearch;
+  $('searchline').innerHTML = s
+    ? `Last engine move: <b>${s.nodes.toLocaleString()}</b> nodes · depth ${s.depth} · ${Math.round(s.ms)} ms` +
+      (s.tb ? ' · tablebase' : '')
+    : 'Last engine move: —';
 }
 
 function renderMoves(){
@@ -281,27 +418,43 @@ function renderMoves(){
   ml.innerHTML = '';
   // plies are history[1..]; mover of ply i is the side to move in history[i-1]
   let row = null;
+  const newRow = num => {
+    const r = document.createElement('div'); r.className='mv';
+    const n = document.createElement('span'); n.className='n'; n.textContent=num+'.'; r.appendChild(n);
+    r.appendChild(document.createElement('span'));
+    r.appendChild(document.createElement('span'));
+    ml.appendChild(r);
+    return r;
+  };
+  const ply = i => {
+    const s = document.createElement('span'); s.className='ply'; s.dataset.i=i; s.textContent=history[i].note||'';
+    if (i===ptr) s.classList.add('cur'); s.onclick=()=>jump(i);
+    return s;
+  };
   for (let i=1;i<history.length;i++){
-    const moverWhite = stmOf(history[i-1].fen) === 'w';
-    const num = Math.floor((i-1)/2) + 1;
-    if (moverWhite){
-      row = document.createElement('div'); row.className='mv';
-      const n=document.createElement('span'); n.className='n'; n.textContent=num+'.'; row.appendChild(n);
-      const w=document.createElement('span'); w.className='ply'; w.dataset.i=i; w.textContent=history[i].note||'';
-      if (i===ptr) w.classList.add('cur'); w.onclick=()=>jump(i); row.appendChild(w);
-      const b=document.createElement('span'); row.appendChild(b);  // placeholder for black
-      ml.appendChild(row);
+    const prev = history[i-1].fen;
+    if (stmOf(prev) === 'w'){
+      row = newRow(fullmove(prev));
+      row.replaceChild(ply(i), row.children[1]);
     } else {
-      if (!row){ row=document.createElement('div'); row.className='mv';
-        const n=document.createElement('span'); n.className='n'; n.textContent=num+'.'; row.appendChild(n);
-        row.appendChild(document.createElement('span')); ml.appendChild(row); }
-      const b=document.createElement('span'); b.className='ply'; b.dataset.i=i; b.textContent=history[i].note||'';
-      if (i===ptr) b.classList.add('cur'); b.onclick=()=>jump(i);
-      row.replaceChild(b, row.children[2]);
+      if (!row) row = newRow(fullmove(prev));   // game starts with Black to move
+      row.replaceChild(ply(i), row.children[2]);
       row = null;
     }
   }
   ml.scrollTop = ml.scrollHeight;
+}
+
+function renderControls(){
+  $('undo').disabled = thinking || ptr === 0;
+  $('redo').disabled = thinking || ptr >= history.length - 1;
+  $('autorow').style.display = mode === 'auto' ? '' : 'none';
+  $('autoplay').textContent = running ? '❚❚ Pause' : '▶ Play';
+  const engine = 'the engine (C++/Texel eval + alpha-beta' +
+                 (cur && cur.tb_enabled ? ', tablebase probing)' : ')');
+  $('sub').textContent = mode === 'auto'
+    ? 'Engine vs engine: ' + engine + ' plays both sides.'
+    : `You play ${colorName(mode)}. ${engine[0].toUpperCase() + engine.slice(1)} plays ${colorName(mode === 'w' ? 'b' : 'w')}.`;
 }
 
 // ---- interaction ----
@@ -310,7 +463,7 @@ function onSquare(name){
   const t = terminal(ptr);
   if (t.over) return;
   const fen = history[ptr].fen;
-  if (stmOf(fen) !== humanColor) return;        // not your turn
+  if (!isHumanTurn(fen)) return;                // not your turn
   if (!cur) return;
 
   if (sel){
@@ -335,51 +488,117 @@ async function playHuman(mv){
   history.push({fen: mv.fen, note: mv.note, uci: mv.uci});
   ptr = history.length - 1;
   await sync();                 // refresh cur for the new (engine-to-move) position
-  const t = terminal(ptr);
-  if (!t.over && stmOf(history[ptr].fen) !== humanColor) await botMove();
+  await maybeEngine();
 }
 
+// One engine move from the current tip. Returns false if nothing was played.
 async function botMove(){
+  const myGen = gen;
   thinking = true; sel = null; render();
   const fen = history[ptr].fen;
   const depth = +$('depth').value;
+  const wasTb = !!(cur && cur.tb);
+  const t0 = performance.now();
   const res = await api('go', fen, depth);
+  const ms = performance.now() - t0;
+  if (myGen !== gen) return false;  // position was replaced while thinking
   thinking = false;
-  if (!res.ok){ render(); return; }
+  if (!res.ok){ render(); return false; }
+  lastSearch = {nodes: res.nodes, ms, depth: res.depth, tb: wasTb};
   // map the engine's bestmove to the legal entry we already have (cur = this fen)
   const mv = cur.moves.find(m => m.uci === res.bestmove);
-  if (!mv){ render(); return; }
+  if (!mv){ render(); return false; }
   history.push({fen: mv.fen, note: mv.note, uci: mv.uci});
   ptr = history.length - 1;
-  await sync();                 // refresh cur for the resulting (your-move) position
+  await sync();                 // refresh cur for the resulting position
+  return myGen === gen;
+}
+
+// Let the engine move for as long as it's the engine's turn at the tip.
+async function maybeEngine(){
+  if (looping) return;
+  looping = true;
+  try {
+    while (!thinking && cur && ptr === history.length - 1){
+      if (terminal(ptr).over){ running = false; break; }
+      if (mode === 'auto'){ if (!running) break; }
+      else if (isHumanTurn(history[ptr].fen)) break;
+      if (!await botMove()){ running = false; break; }
+      if (mode === 'auto') await sleep(250);
+    }
+  } finally {
+    looping = false;
+    render();
+  }
 }
 
 // fetch `legal` for the current position -> cur, then render
 async function sync(){
+  const myGen = gen;
   const fen = history[ptr].fen;
   const res = await api('legal', fen);
-  cur = res.ok ? res : {moves:[], eval_cp:0, status:'normal', check:false, stm:stmOf(fen)};
+  if (myGen !== gen) return;
+  cur = res.ok ? res : {moves:[], eval_cp:0, status:'normal', check:false, stm:stmOf(fen), tb:null};
   render();
 }
 
-function jump(i){ if (thinking) return; sel=null; ptr=i; sync(); }
+function jump(i){ if (thinking) return; sel=null; running=false; ptr=i; sync(); }
 
-function undo(){ if (thinking||ptr===0) return; sel=null;
-  let i = ptr-1; while (i>0 && stmOf(history[i].fen)!==humanColor) i--;   // land on your turn
+function undo(){ if (thinking||ptr===0) return; sel=null; running=false;
+  let i = ptr-1;
+  if (mode !== 'auto') while (i>0 && stmOf(history[i].fen)!==mode) i--;   // land on your turn
   ptr = i; sync(); }
 function redo(){ if (thinking||ptr>=history.length-1) return; sel=null;
-  let i = ptr+1; while (i<history.length-1 && stmOf(history[i].fen)!==humanColor) i++;
+  let i = ptr+1;
+  if (mode !== 'auto') while (i<history.length-1 && stmOf(history[i].fen)!==mode) i++;
   ptr = i; sync(); }
 
-function newGame(){
-  history = [{fen: START, note:null, uci:null}];
-  ptr = 0; humanColor = stmOf(START); sel = null; thinking = false;
-  sync();
+// Start a fresh game from `fen`. The human takes the side to move unless they
+// picked engine-vs-engine. Returns false (and shows why) for an invalid FEN.
+async function startFrom(rawFen){
+  const fen = normalizeFen(rawFen);
+  $('fenerr').textContent = '';
+  if (!fen){ $('fenerr').textContent = 'Enter a FEN first.'; return false; }
+  const res = await api('legal', fen);
+  if (!res.ok){ $('fenerr').textContent = 'Invalid position: ' + (res.error || 'could not parse FEN'); return false; }
+  gen++;
+  history = [{fen, note:null, uci:null}];
+  ptr = 0; sel = null; thinking = false; running = false; lastSearch = null;
+  if (mode !== 'auto'){ mode = stmOf(fen); $('side').value = mode; }
+  cur = res;
+  $('fen').blur();
+  render();
+  await maybeEngine();
+  return true;
+}
+
+function newGame(){ $('preset').value = '0'; startFrom(START); }
+
+async function copyFen(){
+  const fen = history[ptr].fen;
+  try { await navigator.clipboard.writeText(fen); $('fenerr').textContent = ''; }
+  catch { $('fen').value = fen; $('fen').select(); }
 }
 
 // ---- wire up controls ----
+for (const [i, p] of PRESETS.entries()){
+  const o = document.createElement('option'); o.value = i; o.textContent = p.name; $('preset').appendChild(o);
+}
+$('preset').addEventListener('change', e => startFrom(PRESETS[+e.target.value].fen));
+$('loadfen').addEventListener('click', () => startFrom($('fen').value));
+$('fen').addEventListener('keydown', e => { if (e.key === 'Enter') startFrom($('fen').value); });
+$('copyfen').addEventListener('click', copyFen);
+$('side').addEventListener('change', e => {
+  mode = e.target.value; running = false; sel = null;
+  render(); maybeEngine();
+});
+$('autoplay').addEventListener('click', () => {
+  running = !running; render();
+  if (running) maybeEngine();
+});
 $('depth').addEventListener('input', e => $('depthval').textContent = e.target.value);
 $('evaltoggle').addEventListener('change', renderEval);
+$('fifty').addEventListener('change', render);
 $('undo').addEventListener('click', undo);
 $('redo').addEventListener('click', redo);
 $('newgame').addEventListener('click', newGame);

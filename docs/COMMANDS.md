@@ -57,6 +57,11 @@ ctest --test-dir build
 
 # Dump sample TB positions as CSV (fen,category,signed_dtm) for verification
 ./build/chess.exe tbdump KQKR 25
+
+# Load a saved .tb (e.g. a GPU-generated 5-man table): stats + deepest-mate FENs
+# (White to move, and Black to move and losing), plus a probe if a FEN is given
+./build/chess.exe tbload tables/KBNKN.tb
+./build/chess.exe tbload tables/KBNKN.tb "<FEN>"
 ```
 
 ## Tablebase tests

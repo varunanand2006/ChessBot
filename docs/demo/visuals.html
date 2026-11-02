@@ -1,0 +1,748 @@
+<title>Endgames on the GPU</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* Layout: one reading column of four numbered figures (the order of the talk),
+     each a plate with a takeaway, the figure, a caption, and its numbers on demand. */
+  :root{
+    --page:#f4f3ef; --surface:#fcfcfb; --ink:#141310; --ink-2:#52514e; --muted:#6c6a64;
+    --axis:#c3c2b7; --grid:#e1e0d9; --line:rgba(20,19,16,.12);
+    --accent:#8f5f2a;            /* walnut, from the board's dark squares */
+    --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a;   /* categorical slots 1-3 */
+    --future:#dcdad2;            /* passes not yet run */
+    --code-bg:#ebe9e2;
+    --board-light:#edd6b0; --board-dark:#b3855e; /* the engine UI's board, both themes */
+    --font-display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+    --font-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+    --font-mono:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --page:#0f0f0e; --surface:#1a1a19; --ink:#f0efec; --ink-2:#c3c2b7; --muted:#9a988f;
+      --axis:#383835; --grid:#2c2c2a; --line:rgba(255,255,255,.10);
+      --accent:#d6a86e; --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+      --future:#33332f; --code-bg:#24241f; color-scheme:dark;
+    }
+  }
+  :root[data-theme="dark"]{
+    --page:#0f0f0e; --surface:#1a1a19; --ink:#f0efec; --ink-2:#c3c2b7; --muted:#9a988f;
+    --axis:#383835; --grid:#2c2c2a; --line:rgba(255,255,255,.10);
+    --accent:#d6a86e; --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+    --future:#33332f; --code-bg:#24241f; color-scheme:dark;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--page); color:var(--ink); font:16px/1.55 var(--font-body);
+    padding-left:max(16px, env(safe-area-inset-left, 0px));
+    padding-right:max(16px, env(safe-area-inset-right, 0px));
+    padding-block:40px 64px;
+  }
+  .wrap{max-width:1040px; margin:0 auto; display:flex; flex-direction:column; gap:40px}
+  h1,h2{font-family:var(--font-display); font-weight:600; text-wrap:balance; margin:0; letter-spacing:-.01em}
+  h1{font-size:clamp(34px, 5vw, 52px); line-height:1.05}
+  h2{font-size:26px; line-height:1.15}
+  code{font-family:var(--font-mono); font-size:.88em; background:var(--code-bg); padding:1px 5px; border-radius:4px}
+  .eyebrow{font:500 12px/1 var(--font-mono); letter-spacing:.08em; text-transform:uppercase; color:var(--accent)}
+  .lede{max-width:64ch; color:var(--ink-2); font-size:18px; margin:0}
+
+  header{display:flex; flex-direction:column; gap:16px}
+  .figures{display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); border-top:1px solid var(--line); border-bottom:1px solid var(--line); margin-top:8px}
+  .figures div{padding:14px 16px 14px 0; display:flex; flex-direction:column; gap:2px}
+  .figures div + div{padding-left:16px; border-left:1px solid var(--line)}
+  .figures b{font:500 26px/1.1 var(--font-mono); font-variant-numeric:tabular-nums; letter-spacing:-.02em}
+  .figures span{font-size:13px; color:var(--ink-2); line-height:1.35}
+  @media (max-width:720px){
+    .figures{grid-template-columns:repeat(2, minmax(0,1fr))}
+    .figures div:nth-child(3){padding-left:0; border-left:0}
+    .figures div:nth-child(n+3){border-top:1px solid var(--line)}
+  }
+
+  section.fig{background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:28px clamp(16px, 3vw, 32px); display:flex; flex-direction:column; gap:18px; min-width:0}
+  .fighead{display:flex; flex-direction:column; gap:8px}
+  .takeaway{margin:0; max-width:70ch; color:var(--ink-2)}
+  .caption{margin:0; font-size:13.5px; color:var(--muted); max-width:80ch}
+  details{font-size:14px}
+  summary{cursor:pointer; color:var(--accent); font-weight:500; width:max-content; max-width:100%}
+  summary:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+  .tablewrap{overflow-x:auto; margin-top:10px}
+  table{border-collapse:collapse; font-size:13.5px; min-width:100%}
+  th,td{padding:6px 12px 6px 0; text-align:left; border-bottom:1px solid var(--line); white-space:nowrap}
+  th{font-weight:600; color:var(--ink-2); font-size:12px; text-transform:uppercase; letter-spacing:.05em}
+  td.n, th.n{text-align:right; font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+
+  /* shared chart chrome */
+  svg text{font-family:var(--font-body)}
+  .tick{fill:var(--muted); font-size:12px; font-family:var(--font-mono)}
+  .axis-title{fill:var(--ink-2); font-size:12.5px}
+  .gridline{stroke:var(--grid); stroke-width:1}
+  .baseline{stroke:var(--axis); stroke-width:1}
+  #tip{position:fixed; z-index:20; pointer-events:none; background:var(--surface); color:var(--ink); border:1px solid var(--line);
+       box-shadow:0 6px 24px rgba(0,0,0,.18); border-radius:8px; padding:8px 10px; font-size:13px; line-height:1.4; max-width:260px}
+  #tip b{font:500 15px/1.3 var(--font-mono); display:block}
+  #tip .k{display:inline-block; width:14px; height:2px; vertical-align:middle; margin-right:6px}
+
+  /* ---------- Fig 1: retrograde ---------- */
+  .retro{display:grid; grid-template-columns:minmax(0, 360px) minmax(0, 1fr); gap:28px; align-items:start}
+  @media (max-width:820px){ .retro{grid-template-columns:minmax(0,1fr)} }
+  .boardcol{display:flex; flex-direction:column; gap:10px}
+  .board{display:grid; grid-template-columns:repeat(8,1fr); aspect-ratio:1; max-width:100%; width:100%;
+         border:3px solid #303044; border-radius:4px; overflow:hidden; user-select:none}
+  .sq{position:relative; display:flex; align-items:center; justify-content:center; cursor:pointer; padding:0; border:0;
+      font:500 13px/1 var(--font-mono); font-variant-numeric:tabular-nums}
+  .sq.l{background:var(--board-light)} .sq.d{background:var(--board-dark)}
+  .sq .fill{position:absolute; inset:1px; border-radius:2px; transition:opacity .2s}
+  .sq .num{position:relative; z-index:1}
+  .sq .pc{position:relative; z-index:1; font-size:clamp(24px, 6vw, 34px); line-height:1; color:#f4efde; text-shadow:0 0 1px #000, 0 1px 2px #0009; font-family:"Segoe UI Symbol","Noto Sans Symbols 2",system-ui,sans-serif}
+  .sq.illegal::after{content:""; position:absolute; inset:0; background:repeating-linear-gradient(45deg, #0000 0 5px, #0002 5px 7px)}
+  .sq .draw{position:relative; z-index:1; color:#3a2a18; font-weight:600}
+  .sq:hover{box-shadow:inset 0 0 0 2px #303044}
+  .files{display:grid; grid-template-columns:repeat(8,1fr); font:12px var(--font-mono); color:var(--muted); text-align:center; margin-top:-4px}
+  .controls{display:flex; flex-wrap:wrap; gap:8px; align-items:center}
+  .btn{font:500 14px var(--font-body); color:var(--ink); background:var(--page); border:1px solid var(--line); border-radius:6px; padding:7px 12px; cursor:pointer}
+  .btn:hover{border-color:var(--accent)}
+  .btn.primary{background:var(--accent); color:var(--surface); border-color:var(--accent)}
+  .seg{display:inline-flex; border:1px solid var(--line); border-radius:6px; overflow:hidden}
+  .seg button{font:13px var(--font-body); background:var(--page); color:var(--ink-2); border:0; padding:6px 10px; cursor:pointer}
+  .seg button[aria-pressed="true"]{background:var(--ink); color:var(--surface)}
+  .passrow{display:flex; gap:10px; align-items:center}
+  .passrow input{flex:1; accent-color:var(--accent); min-width:0}
+  .passrow output{font:500 14px var(--font-mono); min-width:76px; text-align:right}
+  .readout{font-size:14px; color:var(--ink-2); font-variant-numeric:tabular-nums}
+  .readout b{color:var(--ink); font-family:var(--font-mono); font-weight:500}
+  .ramp{display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--muted); flex-wrap:wrap}
+  .ramp .bar{display:flex; height:10px; border-radius:2px; overflow:hidden; width:140px}
+  .ramp .bar i{flex:1}
+  .ramp .sw{display:inline-block; width:12px; height:12px; border-radius:2px; vertical-align:-2px; margin-right:4px}
+  .chartcol{display:flex; flex-direction:column; gap:10px; min-width:0}
+  .charttitle{font-weight:600; font-size:15px}
+  .chartsub{font-size:13px; color:var(--muted); margin-top:-6px}
+
+  /* ---------- Fig 2: optimization ---------- */
+  .opt{display:flex; flex-direction:column; gap:14px}
+  .optrow{display:grid; grid-template-columns:minmax(0, 220px) minmax(0,1fr) 92px; gap:14px; align-items:center}
+  .optlabel{font-size:14.5px; line-height:1.3}
+  .optlabel small{display:block; color:var(--muted); font-size:12.5px; font-family:var(--font-mono)}
+  .track{position:relative; height:24px}
+  .track .b{position:absolute; left:0; top:0; height:24px; background:var(--s1); border-radius:0 4px 4px 0}
+  .track .v{position:absolute; top:3px; font:500 13.5px var(--font-mono); font-variant-numeric:tabular-nums; white-space:nowrap; color:var(--ink)}
+  .gain{font:500 14px var(--font-mono); text-align:right; font-variant-numeric:tabular-nums}
+  .gain small{display:block; font:12px var(--font-body); color:var(--muted)}
+  .optaxis{display:grid; grid-template-columns:minmax(0, 220px) minmax(0,1fr) 92px; gap:14px}
+  .optaxis .ticks{position:relative; height:18px; border-top:1px solid var(--axis)}
+  .optaxis .ticks span{position:absolute; top:3px; transform:translateX(-50%); font:12px var(--font-mono); color:var(--muted)}
+  .optaxis .ticks span:first-child{transform:none}
+  .optaxis .ticks span:last-child{transform:translateX(-100%)}
+  .track .gl{position:absolute; top:-7px; bottom:-7px; width:1px; background:var(--grid)}
+  @media (max-width:640px){
+    .optrow, .optaxis{grid-template-columns:minmax(0,1fr) 70px}
+    .optrow .optlabel{grid-column:1 / -1}
+    .optaxis > :first-child{display:none}
+  }
+  .expect{display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:0; border:1px solid var(--line); border-radius:8px; overflow:hidden}
+  .expect div{padding:12px 14px; display:flex; flex-direction:column; gap:4px}
+  .expect div + div{border-left:1px solid var(--line)}
+  .expect .what{font-weight:600; font-size:14px}
+  .expect .pred{font-size:13px; color:var(--ink-2)}
+  .expect .got{font:500 22px var(--font-mono)}
+  .expect .hl{background:color-mix(in oklab, var(--s1) 9%, transparent)}
+  @media (max-width:640px){ .expect{grid-template-columns:minmax(0,1fr)} .expect div + div{border-left:0; border-top:1px solid var(--line)} }
+
+  /* ---------- Fig 3: pipeline ---------- */
+  .diagram{overflow-x:auto}
+  .diagram svg{display:block; min-width:760px; width:100%; height:auto}
+  .node rect{fill:var(--page); stroke:var(--axis); stroke-width:1}
+  .node.gpu rect{fill:color-mix(in oklab, var(--s1) 10%, var(--surface)); stroke:var(--s1)}
+  .node.check rect{fill:color-mix(in oklab, var(--s3) 10%, var(--surface)); stroke:var(--s3)}
+  .node .t{font-weight:600; font-size:15px; fill:var(--ink)}
+  .node .d{font-size:12.5px; fill:var(--ink-2)}
+  .node .m{font-family:var(--font-mono); font-size:11.5px; fill:var(--muted)}
+  .edge{stroke:var(--ink-2); stroke-width:1.5; fill:none}
+  .edge.verify{stroke:var(--s3)}
+  .arrowhead{fill:var(--ink-2)} .arrowhead.verify{fill:var(--s3)}
+  .lane{font:500 11.5px var(--font-mono); letter-spacing:.08em; text-transform:uppercase; fill:var(--accent)}
+  .elabel{font-size:12px; fill:var(--ink-2)}
+
+  /* ---------- Fig 4: scatter ---------- */
+  .legend{display:flex; flex-wrap:wrap; gap:6px 18px; font-size:13.5px; color:var(--ink-2)}
+  .legend span{display:inline-flex; align-items:center; gap:6px}
+  .legend svg{flex:none}
+  .scatterwrap svg{display:block; width:100%; height:auto}
+  .dot{stroke:var(--surface); stroke-width:2}
+  .hit{fill:transparent; cursor:default}
+  .hit:focus{outline:none}
+  .hit:focus-visible + .dot, .hit:hover + .dot{stroke:var(--ink)}
+  .refline{stroke-width:1.5; opacity:.55}
+  .dlabel{font-size:12.5px; fill:var(--ink-2)}
+  .ann{font-size:12px; fill:var(--ink-2)}
+  .annline{stroke:var(--muted); stroke-width:1}
+
+  @media (prefers-reduced-motion: reduce){ *{transition:none !important} }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">ChessBot · C++ &amp; CUDA</div>
+    <h1>Endgames on the GPU</h1>
+    <p class="lede">Every pawnless 5-piece endgame with distinct pieces, solved to perfect play on rented RTX 4090s and checked against the Lichess tablebase. These four figures walk through how it works, how the kernel got fast, and how the results were trusted.</p>
+    <div class="figures" aria-label="Headline numbers">
+      <div><b>5.87 B</b><span>positions indexed across 28 materials (4.33 B legal)</span></div>
+      <div><b>17.2×</b><span>kernel speedup, naive port to optimized, on KQ vs KR</span></div>
+      <div><b>~343 M/s</b><span>positions per second at 5-piece scale on one RTX 4090</span></div>
+      <div><b>896 / 896</b><span>sampled positions match Lichess on result and mate distance</span></div>
+    </div>
+  </header>
+
+  <!-- ===================== FIG 1 ===================== -->
+  <section class="fig" id="retrograde" aria-labelledby="f1">
+    <div class="fighead">
+      <div class="eyebrow">Fig. 1 · The algorithm</div>
+      <h2 id="f1">Retrograde analysis: solving backwards from checkmate</h2>
+      <p class="takeaway">Start from every checkmate, then sweep the whole table again and again. Each pass resolves positions one move further from mate, until a pass changes nothing. This page runs the real thing on KR vs K, all 524,288 slots, in your browser.</p>
+    </div>
+    <div class="retro">
+      <div class="boardcol">
+        <div class="board" id="board" role="grid" aria-label="Board: each square shows how fast White mates if the Black king stands there, Black to move"></div>
+        <div class="files" aria-hidden="true"><span>a</span><span>b</span><span>c</span><span>d</span><span>e</span><span>f</span><span>g</span><span>h</span></div>
+        <div class="ramp" aria-label="Color key">
+          <span>mate in 0</span><span class="bar" id="rampbar"></span><span id="rampmax">16</span>
+          <span><i class="sw" style="background:var(--board-light); outline:1px solid var(--line)"></i>= draw</span>
+        </div>
+        <div class="controls">
+          <span style="font-size:13px; color:var(--muted)">Click a square to move the</span>
+          <span class="seg" role="group" aria-label="Piece to move">
+            <button type="button" id="pickR" aria-pressed="true">rook</button>
+            <button type="button" id="pickK" aria-pressed="false">king</button>
+          </span>
+        </div>
+      </div>
+      <div class="chartcol">
+        <div class="charttitle">Positions resolved in each pass</div>
+        <div class="chartsub">Whole KR vs K table · odd passes settle White-to-move, even passes Black-to-move</div>
+        <div id="passchart"></div>
+        <div class="passrow">
+          <button type="button" class="btn primary" id="play">▶ Replay</button>
+          <button type="button" class="btn" id="step">Step</button>
+          <input type="range" id="pass" min="0" max="32" value="32" aria-label="Pass">
+          <output id="passout" for="pass">pass 32</output>
+        </div>
+        <div class="readout" id="readout"></div>
+        <p class="caption">Each number on the board is how many moves White needs to mate if the Black king stands on that square with Black to move. Hatched squares are illegal for the Black king. Squares left as plain board after the last pass are draws, usually because Black can take an undefended rook. The JavaScript solver here was checked against the engine's C++ tablebase on 700 positions with zero mismatches. On the GPU, one thread handles one position per pass, over 209,674,080 positions per 5-piece table.</p>
+      </div>
+    </div>
+    <details>
+      <summary>Show the numbers</summary>
+      <div class="tablewrap"><table id="passtable"><thead><tr><th class="n">Pass</th><th>Side resolved</th><th class="n">Positions resolved</th><th class="n">Running total</th></tr></thead><tbody></tbody></table></div>
+    </details>
+  </section>
+
+  <!-- ===================== FIG 2 ===================== -->
+  <section class="fig" id="optimization" aria-labelledby="f2">
+    <div class="fighead">
+      <div class="eyebrow">Fig. 2 · Making it fast</div>
+      <h2 id="f2">9,872 ms to 575 ms, one measured change at a time</h2>
+      <p class="takeaway">Solving KQ vs KR (3,494,568 positions, 65 passes) on an RTX 4090. Every step was re-checked bit-exact against the CPU solver before the next one. The biggest win came from the change static analysis ranked lowest.</p>
+    </div>
+    <div class="opt" id="optchart" role="img" aria-label="Total solve time per kernel version: naive 9,872 ms; fused legality filter 9,416 ms; O(1) device binomial 3,057 ms; free-square bitmask 575 ms."></div>
+    <div class="expect" aria-label="What static analysis expected versus what was measured">
+      <div><span class="what">Fuse legality filter into the sweep</span><span class="pred">Static analysis: the biggest occupancy win (drops a 512 B move list per thread)</span><span class="got">1.05×</span></div>
+      <div><span class="what">O(1) device binomial</span><span class="pred">An arithmetic cleanup in the index decode</span><span class="got">3.08×</span></div>
+      <div class="hl"><span class="what">Free-square bitmask</span><span class="pred">Ranked minor: replace a 256 B <code>int empty[64]</code> per thread with one 64-bit mask</span><span class="got">5.32×</span></div>
+    </div>
+    <p class="caption">Step gain = previous total ÷ new total. nsys shows the sweep kernel at 100% of GPU time, with launch, copy and sync overhead around 0.5%. The final kernel reaches about 2 GB/s of the 1,008 GB/s peak: it is compute-bound on move generation, not memory-bound. The next lever is a frontier work-list that only revisits positions whose successors changed.</p>
+    <details>
+      <summary>Show the numbers</summary>
+      <div class="tablewrap"><table><thead><tr><th>Kernel (cumulative)</th><th class="n">Total</th><th class="n">ms / pass</th><th class="n">M positions / s</th><th class="n">vs naive</th></tr></thead><tbody>
+        <tr><td>Naive port</td><td class="n">9,872 ms</td><td class="n">151.9</td><td class="n">23.0</td><td class="n">1.00×</td></tr>
+        <tr><td>+ fuse legality filter</td><td class="n">9,416 ms</td><td class="n">144.9</td><td class="n">24.1</td><td class="n">1.05×</td></tr>
+        <tr><td>+ O(1) device binomial</td><td class="n">3,057 ms</td><td class="n">47.0</td><td class="n">74.3</td><td class="n">3.23×</td></tr>
+        <tr><td>+ free-square bitmask</td><td class="n">575 ms</td><td class="n">8.85</td><td class="n">394.8</td><td class="n">17.2×</td></tr>
+      </tbody></table></div>
+    </details>
+  </section>
+
+  <!-- ===================== FIG 3 ===================== -->
+  <section class="fig" id="pipeline" aria-labelledby="f3">
+    <div class="fighead">
+      <div class="eyebrow">Fig. 3 · Trust, then scale</div>
+      <h2 id="f3">Correct on the CPU first, then fanned out across GPUs</h2>
+      <p class="takeaway">The GPU code is a <code>__host__ __device__</code> port of the verified CPU code, so every device stage can be diffed against the CPU on a laptop with no GPU. Only then does it run at full scale in the cloud, and the results are checked once more against an outside source.</p>
+    </div>
+    <div class="diagram">
+      <svg viewBox="0 0 960 420" role="img" aria-labelledby="pipetitle">
+        <title id="pipetitle">Pipeline: CPU reference solver, host-side gates, CUDA sweep kernel, multi-GPU fan-out, S3 storage, engine probing, with Lichess verification</title>
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="ahv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arrowhead verify" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="lane" x="20" y="26">Correctness first · runs on any laptop</text>
+        <text class="lane" x="20" y="208">Scale out · rented GPUs</text>
+
+        <g class="node"><rect x="20" y="40" width="270" height="104" rx="8"/>
+          <text class="t" x="38" y="70">CPU reference solver</text>
+          <text class="d" x="38" y="94">C++ retrograde solver; perft-verified</text>
+          <text class="d" x="38" y="112">move generator underneath</text>
+          <text class="m" x="38" y="133">tb_solve · solve_sweep_comb</text></g>
+        <g class="node"><rect x="345" y="40" width="270" height="104" rx="8"/>
+          <text class="t" x="363" y="70">Host-side gates</text>
+          <text class="d" x="363" y="94">Device code compiled for the host,</text>
+          <text class="d" x="363" y="112">diffed bit-exact against the CPU</text>
+          <text class="m" x="363" y="133">CTest gates · no GPU needed</text></g>
+        <g class="node gpu"><rect x="670" y="40" width="270" height="104" rx="8"/>
+          <text class="t" x="688" y="70">CUDA sweep kernel</text>
+          <text class="d" x="688" y="94">One thread per position, Jacobi</text>
+          <text class="d" x="688" y="112">passes until nothing changes</text>
+          <text class="m" x="688" y="133">~343 M positions/s · RTX 4090</text></g>
+
+        <g class="node gpu"><rect x="20" y="222" width="270" height="104" rx="8"/>
+          <text class="t" x="38" y="252">Multi-GPU fan-out</text>
+          <text class="d" x="38" y="276">One worker per GPU, disjoint slices</text>
+          <text class="d" x="38" y="294">of the 28 materials; idempotent</text>
+          <text class="m" x="38" y="315">fanout.sh · 4 GPUs, under an hour</text></g>
+        <g class="node"><rect x="345" y="222" width="270" height="104" rx="8"/>
+          <text class="t" x="363" y="252">S3, provisioned in Terraform</text>
+          <text class="d" x="363" y="276">Each solved table streams straight</text>
+          <text class="d" x="363" y="294">to a versioned, encrypted bucket</text>
+          <text class="m" x="363" y="315">scoped IAM · RunPod + AWS</text></g>
+        <g class="node"><rect x="670" y="222" width="270" height="104" rx="8"/>
+          <text class="t" x="688" y="252">Engine probes the tables</text>
+          <text class="d" x="688" y="276">Perfect endgame play in the web UI,</text>
+          <text class="d" x="688" y="294">a handful of nodes per move</text>
+          <text class="m" x="688" y="315">CHESS_TB_DIR · .tb files</text></g>
+
+        <g class="node check"><rect x="345" y="356" width="270" height="56" rx="8"/>
+          <text class="t" x="363" y="380">Lichess (Gaviota) API</text>
+          <text class="m" x="363" y="400">28/28 materials · 896/896 positions</text></g>
+
+        <path class="edge" d="M290,92 H343" marker-end="url(#ah)"/>
+        <path class="edge" d="M615,92 H668" marker-end="url(#ah)"/>
+        <path class="edge" d="M805,144 V176 H155 V220" marker-end="url(#ah)"/>
+        <text class="elabel" x="480" y="170" text-anchor="middle">same kernels, 5-piece scale</text>
+        <path class="edge" d="M290,274 H343" marker-end="url(#ah)"/>
+        <path class="edge" d="M615,274 H668" marker-end="url(#ah)"/>
+        <path class="edge verify" d="M480,326 V354" marker-end="url(#ahv)"/>
+        <text class="elabel" x="490" y="345">verified against</text>
+      </svg>
+    </div>
+    <p class="caption">The bit-exact gates cover tables up to 4 pieces. For 5 pieces, the full CPU solve would take 15–20 hours per material, so correctness rests on the same kernels passing those gates plus the external Lichess sample, which includes each table's two deepest mates.</p>
+  </section>
+
+  <!-- ===================== FIG 4 ===================== -->
+  <section class="fig" id="scaling" aria-labelledby="f4">
+    <div class="fighead">
+      <div class="eyebrow">Fig. 4 · At full scale</div>
+      <h2 id="f4">Solve time follows the number of passes, and queens cost more per pass</h2>
+      <p class="takeaway">All 28 tables are the same size, 209,674,080 positions each, yet solve times range from 7 to 85 seconds. Time grows with the passes a table needs, which grows with its deepest mate. The cost of each pass splits cleanly by whether a queen is on the board, because queens generate more moves for every thread to check.</p>
+    </div>
+    <div class="legend" id="legend4"></div>
+    <div class="scatterwrap" id="scatter"></div>
+    <p class="caption">GPU solve time only, one RTX 4090; host setup adds about 96 s per material. Lines show each group's average seconds per pass. Total GPU time for all 28 tables: 873 s.</p>
+    <details>
+      <summary>Show the numbers</summary>
+      <div class="tablewrap"><table id="t4"><thead><tr><th>Material</th><th class="n">Queens</th><th class="n">Deepest mate</th><th class="n">Passes</th><th class="n">Solve (s)</th><th class="n">s / pass</th><th class="n">Lichess</th></tr></thead><tbody></tbody></table></div>
+    </details>
+  </section>
+</div>
+<div id="tip" hidden></div>
+
+<script>
+// ---------------- shared helpers ----------------
+const $ = id => document.getElementById(id);
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs = {}, parent){
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+const fmt = n => n.toLocaleString('en-US');
+const tip = $('tip');
+function showTip(evt, rows){   // rows: [{value, label, color?}]
+  tip.replaceChildren();
+  for (const r of rows){
+    const v = document.createElement('b'); v.textContent = r.value; tip.appendChild(v);
+    const l = document.createElement('div');
+    if (r.color){ const k = document.createElement('span'); k.className = 'k'; k.style.background = r.color; l.appendChild(k); }
+    l.appendChild(document.createTextNode(r.label)); tip.appendChild(l);
+  }
+  tip.hidden = false;
+  let x, y;
+  if (evt.clientX !== undefined && evt.type.startsWith('pointer')){ x = evt.clientX; y = evt.clientY; }
+  else { const b = evt.target.getBoundingClientRect(); x = b.left + b.width / 2; y = b.top; }
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = Math.min(window.innerWidth - w - 8, Math.max(8, x + 14)) + 'px';
+  tip.style.top  = Math.max(8, y - h - 12) + 'px';
+}
+const hideTip = () => { tip.hidden = true; };
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+// ---------------- Fig 1: KR vs K retrograde solver ----------------
+// Index: ((wk*64 + wr)*64 + bk)*2 + stm, stm 0 = White to move.
+// dtm = plies to mate for White; -1 = never resolved (draw); -2 = illegal.
+function solveKRK(){
+  const N = 64*64*64*2;
+  const idx = (wk,wr,bk,s) => ((wk*64+wr)*64+bk)*2+s;
+  const fx = s => s & 7, ry = s => s >> 3;
+  const adj = (a,b) => a!==b && Math.abs(fx(a)-fx(b))<=1 && Math.abs(ry(a)-ry(b))<=1;
+  const KD = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+  const RD = [[1,0],[-1,0],[0,1],[0,-1]];
+  function rookAttacks(r, block){   // the Black king never blocks its own escape line
+    const out = [];
+    for (const [dx,dy] of RD){
+      let x=fx(r)+dx, y=ry(r)+dy;
+      while (x>=0&&x<8&&y>=0&&y<8){ const s=y*8+x; out.push(s); if (s===block) break; x+=dx; y+=dy; }
+    }
+    return out;
+  }
+  const legal = new Uint8Array(N), inCheck = new Uint8Array(N);
+  const start = new Int32Array(N+1);
+  const kids = [];                   // child indices; -1 = Black captured the rook (draw)
+  for (let wk=0;wk<64;wk++) for (let wr=0;wr<64;wr++) for (let bk=0;bk<64;bk++){
+    const ok = wk!==wr && wr!==bk && wk!==bk && !adj(wk,bk);
+    const att = ok ? rookAttacks(wr, wk) : [];
+    const chk = att.includes(bk);
+    for (let s=0;s<2;s++){
+      const i = idx(wk,wr,bk,s);
+      start[i] = kids.length;
+      if (!ok || (s===0 && chk)) continue;
+      legal[i] = 1; inCheck[i] = (s===1 && chk) ? 1 : 0;
+      if (s===1){
+        for (const [dx,dy] of KD){
+          const x=fx(bk)+dx, y=ry(bk)+dy; if (x<0||x>7||y<0||y>7) continue;
+          const t=y*8+x;
+          if (t===wk || adj(t,wk)) continue;
+          if (t===wr){ if (!adj(wr,wk)) kids.push(-1); continue; }
+          if (att.includes(t)) continue;
+          kids.push(idx(wk,wr,t,0));
+        }
+      } else {
+        for (const [dx,dy] of KD){
+          const x=fx(wk)+dx, y=ry(wk)+dy; if (x<0||x>7||y<0||y>7) continue;
+          const t=y*8+x;
+          if (t===wr || t===bk || adj(t,bk)) continue;
+          kids.push(idx(t,wr,bk,1));
+        }
+        for (const [dx,dy] of RD){
+          let x=fx(wr)+dx, y=ry(wr)+dy;
+          while (x>=0&&x<8&&y>=0&&y<8){ const t=y*8+x; if (t===wk||t===bk) break; kids.push(idx(wk,t,bk,1)); x+=dx; y+=dy; }
+        }
+      }
+    }
+  }
+  start[N] = kids.length;
+  const K = Int32Array.from(kids);
+  const dtm = new Int16Array(N).fill(-1);
+  let legalCount = 0;
+  for (let i=0;i<N;i++){ if (!legal[i]) dtm[i] = -2; else legalCount++; }
+  const perPass = [0];
+  for (let i=1;i<N;i+=2) if (legal[i] && inCheck[i] && start[i]===start[i+1]){ dtm[i]=0; perPass[0]++; }
+  for (let p=1;;p++){                // Jacobi: each pass reads only the previous pass's results
+    const newly = [];
+    const s = (p % 2 === 1) ? 0 : 1;
+    for (let i=s;i<N;i+=2){
+      if (dtm[i] !== -1) continue;
+      const a=start[i], b=start[i+1];
+      if (s===0){
+        for (let k=a;k<b;k++){ const c=K[k]; if (c>=0 && dtm[c]===p-1){ newly.push(i); break; } }
+      } else {
+        if (a===b) continue;         // stalemate
+        let all = true;
+        for (let k=a;k<b;k++){ const c=K[k]; if (c<0 || dtm[c]<0 || dtm[c]>p-1){ all=false; break; } }
+        if (all) newly.push(i);
+      }
+    }
+    if (!newly.length) break;
+    for (const i of newly) dtm[i] = p;
+    perPass.push(newly.length);
+  }
+  return {dtm, legal, perPass, idx, legalCount};
+}
+
+const KRK = solveKRK();
+const LAST = KRK.perPass.length - 1;            // 32
+let pass = LAST, wk = 19 /* d3 */, wr = 41 /* b6 */, pick = 'R', timer = null;
+// Sequential blue, step 250 -> 700: deeper mate = darker.
+const RAMP = ['#86b6ef','#6da7ec','#5598e7','#3987e5','#2a78d6','#256abf','#1c5cab','#184f95','#104281','#0d366b'];
+const MAXMOVES = 16;
+const rampColor = m => RAMP[Math.min(RAMP.length - 1, Math.round(m * (RAMP.length - 1) / MAXMOVES))];
+$('rampbar').replaceChildren(...RAMP.map(c => { const i = document.createElement('i'); i.style.background = c; return i; }));
+$('rampmax').textContent = 'mate in ' + MAXMOVES;
+$('pass').max = LAST;
+
+const sqName = s => 'abcdefgh'[s & 7] + ((s >> 3) + 1);
+const squares = [];
+(function buildBoard(){
+  const b = $('board');
+  for (let r = 7; r >= 0; r--) for (let f = 0; f < 8; f++){
+    const s = r * 8 + f;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'sq ' + ((r + f) % 2 ? 'l' : 'd');
+    btn.addEventListener('click', () => place(s));
+    btn.addEventListener('pointermove', e => squareTip(e, s));
+    btn.addEventListener('focus', e => squareTip(e, s));
+    btn.addEventListener('pointerleave', hideTip);
+    btn.addEventListener('blur', hideTip);
+    b.appendChild(btn);
+    squares[s] = btn;
+  }
+})();
+
+function squareInfo(s){
+  if (s === wk) return {kind:'piece', text:'White king'};
+  if (s === wr) return {kind:'piece', text:'White rook'};
+  const i = KRK.idx(wk, wr, s, 1);
+  if (!KRK.legal[i]) return {kind:'illegal', text:'Black king cannot stand here'};
+  const d = KRK.dtm[i];
+  if (d >= 0 && d <= pass) return {kind:'win', moves:d / 2, d};
+  if (d >= 0) return {kind:'pending', text:'Not resolved yet (pass ' + d + ')'};
+  return {kind: pass >= LAST ? 'draw' : 'pending', text: pass >= LAST ? 'Draw: Black can hold' : 'Not resolved yet'};
+}
+function squareTip(e, s){
+  const info = squareInfo(s);
+  const lbl = 'Black king on ' + sqName(s) + ', Black to move';
+  if (info.kind === 'win') showTip(e, [{value: info.moves === 0 ? 'Checkmate' : 'White mates in ' + info.moves, label: lbl + ' · resolved on pass ' + info.d}]);
+  else showTip(e, [{value: info.text, label: 'Square ' + sqName(s)}]);
+}
+
+function renderBoard(){
+  for (let s = 0; s < 64; s++){
+    const btn = squares[s], info = squareInfo(s);
+    btn.classList.toggle('illegal', info.kind === 'illegal');
+    btn.replaceChildren();
+    if (info.kind === 'piece'){
+      const p = document.createElement('span'); p.className = 'pc'; p.textContent = s === wk ? '♚' : '♜'; btn.appendChild(p);
+      btn.setAttribute('aria-label', sqName(s) + ': ' + info.text);
+    } else if (info.kind === 'win'){
+      const f = document.createElement('span'); f.className = 'fill'; f.style.background = rampColor(info.moves); btn.appendChild(f);
+      const n = document.createElement('span'); n.className = 'num'; n.textContent = info.moves === 0 ? '#' : info.moves;
+      n.style.color = info.moves <= 4 ? '#0b1a2e' : '#ffffff'; btn.appendChild(n);
+      btn.setAttribute('aria-label', sqName(s) + ': ' + (info.moves === 0 ? 'checkmate' : 'White mates in ' + info.moves));
+    } else if (info.kind === 'draw'){
+      const n = document.createElement('span'); n.className = 'draw'; n.textContent = '='; btn.appendChild(n);
+      btn.setAttribute('aria-label', sqName(s) + ': draw');
+    } else {
+      btn.setAttribute('aria-label', sqName(s) + ': ' + info.text);
+    }
+  }
+}
+
+// pass chart
+const PC = {W: 560, H: 230, l: 46, r: 8, t: 10, b: 30};
+const passSvg = el('svg', {viewBox: `0 0 ${PC.W} ${PC.H}`, role: 'img', 'aria-label': 'Bar chart of positions resolved per pass, passes 0 to 32'});
+passSvg.style.width = '100%'; passSvg.style.height = 'auto'; passSvg.style.display = 'block';
+$('passchart').appendChild(passSvg);
+const passBars = [];
+(function buildPassChart(){
+  const ymax = 40000, iw = PC.W - PC.l - PC.r, ih = PC.H - PC.t - PC.b;
+  const y = v => PC.t + ih - v / ymax * ih;
+  for (const v of [0, 10000, 20000, 30000, 40000]){
+    el('line', {class: v ? 'gridline' : 'baseline', x1: PC.l, x2: PC.W - PC.r, y1: y(v), y2: y(v)}, passSvg);
+    const t = el('text', {class: 'tick', x: PC.l - 8, y: y(v) + 4, 'text-anchor': 'end'}, passSvg); t.textContent = v ? (v / 1000) + 'K' : '0';
+  }
+  const n = KRK.perPass.length, band = iw / n, bw = Math.min(24, band - 2);
+  KRK.perPass.forEach((v, p) => {
+    const x = PC.l + p * band + (band - bw) / 2, h = Math.max(1, v / ymax * ih);
+    const r = Math.min(4, bw / 2, h);
+    // 4px rounded top, square at the baseline
+    const d = `M${x},${y(0)} V${y(0) - h + r} Q${x},${y(0) - h} ${x + r},${y(0) - h} H${x + bw - r} Q${x + bw},${y(0) - h} ${x + bw},${y(0) - h + r} V${y(0)} Z`;
+    const bar = el('path', {d}, passSvg);
+    const hit = el('rect', {x: PC.l + p * band, y: PC.t, width: band, height: ih, fill: 'transparent', tabindex: 0,
+                            'aria-label': `Pass ${p}: ${fmt(v)} positions`}, passSvg);
+    const show = e => showTip(e, [{value: fmt(v) + ' positions', label: `Pass ${p} · ${p === 0 ? 'checkmates' : (p % 2 ? 'White to move' : 'Black to move')}`, color: css('--s1')}]);
+    hit.addEventListener('pointermove', show); hit.addEventListener('focus', show);
+    hit.addEventListener('pointerleave', hideTip); hit.addEventListener('blur', hideTip);
+    hit.addEventListener('click', () => { stop(); setPass(p); });
+    passBars.push(bar);
+    if (p % 8 === 0){ const t = el('text', {class: 'tick', x: PC.l + p * band + band / 2, y: PC.H - 10, 'text-anchor': 'middle'}, passSvg); t.textContent = p; }
+  });
+})();
+
+function renderPassChart(){
+  passBars.forEach((b, p) => b.setAttribute('fill', p <= pass ? css('--s1') : css('--future')));
+}
+function renderReadout(){
+  let done = 0; for (let p = 0; p <= pass; p++) done += KRK.perPass[p];
+  const deepest = Math.ceil(pass / 2);
+  $('passout').textContent = 'pass ' + pass;
+  $('pass').value = pass;
+  $('readout').replaceChildren();
+  const parts = [['Resolved: ', fmt(done)], [' of ', fmt(KRK.legalCount)], [' legal positions · deepest so far: mate in ', String(deepest)]];
+  if (pass >= LAST) parts.push([' · table complete; the rest are draws', '']);
+  for (const [a, b] of parts){ $('readout').appendChild(document.createTextNode(a)); if (b){ const e = document.createElement('b'); e.textContent = b; $('readout').appendChild(e); } }
+}
+function renderFig1(){ renderBoard(); renderPassChart(); renderReadout(); }
+function setPass(p){ pass = Math.max(0, Math.min(LAST, p)); renderFig1(); }
+function stop(){ if (timer){ clearInterval(timer); timer = null; } $('play').textContent = '▶ Replay'; }
+function play(){
+  if (timer){ stop(); return; }
+  if (pass >= LAST) setPass(0);
+  $('play').textContent = '❚❚ Pause';
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  timer = setInterval(() => { if (pass >= LAST){ stop(); return; } setPass(pass + 1); }, reduce ? 700 : 380);
+}
+function place(s){
+  if (pick === 'R'){ if (s === wk) return; wr = s; }
+  else { if (s === wr) return; wk = s; }
+  hideTip(); renderFig1();
+}
+$('play').addEventListener('click', play);
+$('step').addEventListener('click', () => { stop(); setPass(pass >= LAST ? 0 : pass + 1); });
+$('pass').addEventListener('input', e => { stop(); setPass(+e.target.value); });
+for (const [id, v] of [['pickR', 'R'], ['pickK', 'K']])
+  $(id).addEventListener('click', () => { pick = v; $('pickR').setAttribute('aria-pressed', v === 'R'); $('pickK').setAttribute('aria-pressed', v === 'K'); });
+(function fillPassTable(){
+  let run = 0; const tb = document.querySelector('#passtable tbody');
+  KRK.perPass.forEach((v, p) => {
+    run += v; const tr = document.createElement('tr');
+    for (const [txt, n] of [[p, 1], [p === 0 ? 'Checkmates (Black to move)' : (p % 2 ? 'White to move' : 'Black to move'), 0], [fmt(v), 1], [fmt(run), 1]]){
+      const td = document.createElement('td'); if (n) td.className = 'n'; td.textContent = txt; tr.appendChild(td);
+    }
+    tb.appendChild(tr);
+  });
+})();
+renderFig1();
+
+// ---------------- Fig 2: optimization bars ----------------
+(function fig2(){
+  const steps = [
+    {label: 'Naive port', note: '151.9 ms/pass · 23.0 Mpos/s', ms: 9872},
+    {label: '+ Fuse legality filter', note: '144.9 ms/pass · 24.1 Mpos/s', ms: 9416},
+    {label: '+ O(1) device binomial', note: '47.0 ms/pass · 74.3 Mpos/s', ms: 3057},
+    {label: '+ Free-square bitmask', note: '8.85 ms/pass · 394.8 Mpos/s', ms: 575},
+  ];
+  const max = 10000, root = $('optchart');
+  steps.forEach((s, i) => {
+    const row = document.createElement('div'); row.className = 'optrow';
+    const lab = document.createElement('div'); lab.className = 'optlabel'; lab.textContent = s.label;
+    const sm = document.createElement('small'); sm.textContent = s.note; lab.appendChild(sm);
+    const track = document.createElement('div'); track.className = 'track';
+    for (const g of [2500, 5000, 7500, 10000]){ const gl = document.createElement('i'); gl.className = 'gl'; gl.style.left = (g / max * 100) + '%'; track.appendChild(gl); }
+    const bar = document.createElement('div'); bar.className = 'b'; bar.style.width = (s.ms / max * 100) + '%';
+    bar.tabIndex = 0; bar.setAttribute('aria-label', `${s.label}: ${fmt(s.ms)} ms`);
+    const val = document.createElement('span'); val.className = 'v'; val.textContent = fmt(s.ms) + ' ms';
+    // value sits just past the bar end, or inside the bar's end if it would run off the track
+    if (s.ms / max > 0.86){ val.style.right = (100 - s.ms / max * 100) + '%'; val.style.marginRight = '8px'; val.style.color = '#ffffff'; }
+    else { val.style.left = 'calc(' + (s.ms / max * 100) + '% + 8px)'; }
+    track.append(bar, val);
+    const gain = document.createElement('div'); gain.className = 'gain';
+    if (i === 0){ gain.textContent = '—'; const g = document.createElement('small'); g.textContent = 'baseline'; gain.appendChild(g); }
+    else { gain.textContent = '×' + (steps[i - 1].ms / s.ms).toFixed(2); const g = document.createElement('small'); g.textContent = 'step gain'; gain.appendChild(g); }
+    const show = e => showTip(e, [{value: fmt(s.ms) + ' ms total', label: s.label + ' · ' + s.note + ' · ' + (9872 / s.ms).toFixed(1) + '× vs naive', color: css('--s1')}]);
+    bar.addEventListener('pointermove', show); bar.addEventListener('focus', show);
+    bar.addEventListener('pointerleave', hideTip); bar.addEventListener('blur', hideTip);
+    row.append(lab, track, gain); root.appendChild(row);
+  });
+  const ax = document.createElement('div'); ax.className = 'optaxis';
+  const ticks = document.createElement('div'); ticks.className = 'ticks';
+  for (const t of [0, 2500, 5000, 7500, 10000]){ const s = document.createElement('span'); s.style.left = (t / max * 100) + '%'; s.textContent = t ? fmt(t) : '0 ms'; ticks.appendChild(s); }
+  ax.append(document.createElement('div'), ticks, document.createElement('div'));
+  root.appendChild(ax);
+})();
+
+// ---------------- Fig 4: passes vs solve time ----------------
+(function fig4(){
+  // From cuda/PROFILING.md, Phase 5 (RTX 4090). [material, deepest mate, passes, solve s]
+  const raw = [
+    ['KBN vs KN',107,154,68.6],['KRB vs KQ',70,91,60.8],['KRN vs KQ',69,97,63.9],['KQR vs KQ',67,123,84.8],
+    ['KRB vs KR',65,118,64.7],['KBN vs KQ',53,91,59.7],['KQN vs KQ',41,71,46.1],['KQN vs KR',41,55,33.1],
+    ['KRN vs KR',41,66,34.5],['KBN vs KR',41,26,13.4],['KQR vs KN',40,19,11.7],['KQB vs KR',40,41,25.2],
+    ['KRB vs KN',40,53,28.9],['KBN vs KB',39,36,16.9],['KRN vs KN',37,61,29.9],['KQR vs KR',34,37,22.6],
+    ['KQB vs KQ',33,61,40.6],['KRN vs KB',31,55,28.7],['KRB vs KB',30,55,29.0],['KRBN vs K',29,23,12.7],
+    ['KQR vs KB',29,21,12.9],['KQB vs KN',21,23,13.7],['KQN vs KN',21,27,15.0],['KQB vs KB',17,25,14.6],
+    ['KQN vs KB',17,29,16.9],['KQBN vs K',7,15,9.8],['KQRB vs K',5,11,7.3],['KQRN vs K',5,11,7.2],
+  ];
+  const data = raw.map(([m, mate, passes, s]) => ({m, mate, passes, s, q: (m.match(/Q/g) || []).length}));
+  const groups = [
+    {q: 0, name: 'No queen', color: '--s1', shape: 'circle'},
+    {q: 1, name: 'One queen', color: '--s2', shape: 'square'},
+    {q: 2, name: 'Two queens', color: '--s3', shape: 'diamond'},
+  ];
+  for (const g of groups){
+    const pts = data.filter(d => d.q === g.q);
+    g.rate = pts.reduce((a, d) => a + d.s / d.passes, 0) / pts.length;
+    g.n = pts.length;
+  }
+  function shape(parent, kind, cx, cy, size, attrs){
+    if (kind === 'circle') return el('circle', {cx, cy, r: size, ...attrs}, parent);
+    if (kind === 'square') return el('rect', {x: cx - size * .9, y: cy - size * .9, width: size * 1.8, height: size * 1.8, rx: 1.5, ...attrs}, parent);
+    const s = size * 1.25;
+    return el('path', {d: `M${cx},${cy - s} L${cx + s},${cy} L${cx},${cy + s} L${cx - s},${cy} Z`, ...attrs}, parent);
+  }
+  // legend
+  const lg = $('legend4');
+  for (const g of groups){
+    const span = document.createElement('span');
+    const sv = el('svg', {width: 16, height: 16, viewBox: '0 0 16 16', 'aria-hidden': 'true'});
+    shape(sv, g.shape, 8, 8, 5, {fill: `var(${g.color})`});
+    span.appendChild(sv);
+    span.appendChild(document.createTextNode(`${g.name} (${g.n}) · ${g.rate.toFixed(2)} s per pass`));
+    lg.appendChild(span);
+  }
+  // plot
+  const W = 820, H = 400, L = 56, R = 150, T = 14, B = 46;
+  const xmax = 160, ymax = 110, iw = W - L - R, ih = H - T - B;
+  const X = v => L + v / xmax * iw, Y = v => T + ih - v / ymax * ih;
+  const svg = el('svg', {viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Scatter plot of GPU solve time against Jacobi passes for 28 materials, grouped by number of queens'});
+  $('scatter').appendChild(svg);
+  for (const v of [0, 25, 50, 75, 100]){
+    el('line', {class: v ? 'gridline' : 'baseline', x1: L, x2: L + iw, y1: Y(v), y2: Y(v)}, svg);
+    el('text', {class: 'tick', x: L - 8, y: Y(v) + 4, 'text-anchor': 'end'}, svg).textContent = v;
+  }
+  for (const v of [0, 40, 80, 120, 160]) el('text', {class: 'tick', x: X(v), y: T + ih + 18, 'text-anchor': 'middle'}, svg).textContent = v;
+  el('text', {class: 'axis-title', x: L + iw / 2, y: H - 6, 'text-anchor': 'middle'}, svg).textContent = 'Jacobi passes to converge';
+  el('text', {class: 'axis-title', x: 14, y: T + ih / 2, transform: `rotate(-90 14 ${T + ih / 2})`, 'text-anchor': 'middle'}, svg).textContent = 'GPU solve time (s)';
+  // reference lines: average seconds per pass for each group
+  const ends = [];
+  for (const g of groups){
+    const xEnd = 150;
+    el('line', {class: 'refline', x1: X(0), y1: Y(0), x2: X(xEnd), y2: Y(xEnd * g.rate), stroke: `var(${g.color})`}, svg);
+    ends.push({g, x: X(xEnd), y: Y(xEnd * g.rate)});
+  }
+  // direct labels at the right edge, nudged apart so they never collide
+  ends.sort((a, b) => a.y - b.y);
+  for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 18) ends[i].y = ends[i - 1].y + 18;
+  for (const e of ends){
+    el('text', {class: 'dlabel', x: e.x + 8, y: e.y + 4}, svg).textContent = `${e.g.name} · ${e.g.rate.toFixed(2)} s/pass`;
+  }
+  // annotations for the stories worth telling
+  const ann = [
+    {m: 'KBN vs KN', text: 'KBN vs KN · mate-in-107', dx: 6, dy: 52, anchor: 'end'},
+    {m: 'KQR vs KQ', text: 'KQR vs KQ · slowest', dx: -12, dy: -20, anchor: 'end'},
+    {m: 'KQRN vs K', text: 'KQRN vs K · mate-in-5', dx: 40, dy: 22, anchor: 'start'},
+  ];
+  for (const a of ann){
+    const d = data.find(x => x.m === a.m), cx = X(d.passes), cy = Y(d.s);
+    el('line', {class: 'annline', x1: cx + Math.sign(a.dx) * 6, y1: cy + Math.sign(a.dy) * 6, x2: cx + a.dx, y2: cy + a.dy + 4}, svg);
+    el('text', {class: 'ann', x: cx + a.dx + (a.anchor === 'end' ? -2 : 2), y: cy + a.dy, 'text-anchor': a.anchor}, svg).textContent = a.text;
+  }
+  // points: transparent 24px hit area first, then the visible mark
+  for (const d of data){
+    const g = groups[d.q], cx = X(d.passes), cy = Y(d.s);
+    const hit = el('circle', {class: 'hit', cx, cy, r: 12, tabindex: 0, 'aria-label': `${d.m}: ${d.passes} passes, ${d.s} s`}, svg);
+    shape(svg, g.shape, cx, cy, 5, {class: 'dot', fill: `var(${g.color})`});
+    const show = e => showTip(e, [
+      {value: d.s.toFixed(1) + ' s · ' + d.passes + ' passes', label: d.m + ' · mate-in-' + d.mate + ' · ' + (d.s / d.passes).toFixed(2) + ' s/pass', color: css(g.color)},
+    ]);
+    hit.addEventListener('pointermove', show); hit.addEventListener('focus', show);
+    hit.addEventListener('pointerleave', hideTip); hit.addEventListener('blur', hideTip);
+  }
+  // table view
+  const tb = document.querySelector('#t4 tbody');
+  for (const d of [...data].sort((a, b) => b.passes - a.passes)){
+    const tr = document.createElement('tr');
+    for (const [v, n] of [[d.m, 0], [d.q, 1], ['mate-in-' + d.mate, 1], [d.passes, 1], [d.s.toFixed(1), 1], [(d.s / d.passes).toFixed(3), 1], ['32/32', 1]]){
+      const td = document.createElement('td'); if (n) td.className = 'n'; td.textContent = v; tr.appendChild(td);
+    }
+    tb.appendChild(tr);
+  }
+})();
+
+// colors read from tokens: repaint the pass chart when the theme changes
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', renderPassChart);
+new MutationObserver(renderPassChart).observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme']});
+</script>

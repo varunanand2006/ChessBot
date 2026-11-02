@@ -49,6 +49,7 @@ public:
     std::size_t               size()   const { return value_.size(); }
     const std::vector<Piece>& extras() const { return index_.extras(); }
     const std::string&        name()   const { return name_; }
+    const CombIndex&          index()  const { return index_; }
 
     int16_t value_at(std::size_t i) const { return value_[i]; }
 
