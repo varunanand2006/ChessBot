@@ -152,6 +152,8 @@ static reasoning. Full numbers and the profiling notes are in
 stored durably. The infrastructure and its design trade-offs are documented in
 [`cloud/README.md`](cloud/README.md).
 
+<p align="center"><img src="docs/demo/fig3-pipeline.png" alt="Pipeline: CPU reference solver, host-side gates, CUDA sweep kernel, multi-GPU fan-out, S3, engine probing, verified against Lichess" width="820"></p>
+
 | | |
 |---|---|
 | Positions indexed / solved | 5.87 billion indexed, 4.33 billion legal |
