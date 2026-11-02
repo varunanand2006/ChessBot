@@ -156,6 +156,11 @@
     </select>
     <div class="row" id="autorow" style="margin-top:8px; display:none">
       <button id="autoplay" class="primary">▶ Play</button>
+      <select class="side" id="speed" aria-label="Playback speed" style="flex:1; width:auto">
+        <option value="900">Slow</option>
+        <option value="250" selected>Normal</option>
+        <option value="0">Fast</option>
+      </select>
     </div>
     <label class="ctl" style="margin-top:12px"><span>Strength (search depth)</span><b id="depthval">3</b></label>
     <input type="range" id="depth" min="1" max="8" value="3">
@@ -189,13 +194,19 @@ const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const GLYPH = {k:'♚',q:'♛',r:'♜',b:'♝',n:'♞',p:'♟'};
 
 // Demo positions. The <=4-piece ones work whenever CHESS_TB_DIR is set (the
-// engine builds those tables in RAM on first probe). For 5-piece positions, run
-// `chess tbload <dir>/<MATERIAL>.tb` on the machine that holds the tables; it
-// prints the deepest-mate FENs to paste here.
+// engine builds those tables in RAM on first probe); the 5-piece ones need that
+// material's .tb file in CHESS_TB_DIR. `chess tbload <dir>/<MATERIAL>.tb` prints
+// each table's deepest mates as FENs. noFifty: the mate runs past 50 moves
+// without a capture, so loading it unticks the 50-move rule.
 const PRESETS = [
-  {name:'Standard starting position', fen:START},
-  {name:'KR vs K: deepest mate (mate in 16)', fen:'8/8/8/8/8/2k5/1R6/K7 w - - 0 1'},
-  {name:'KQ vs KR: deepest mate (mate in 35)', fen:'8/8/8/8/2r5/8/2k5/K6Q w - - 0 1'},
+  {group:'Game', name:'Standard starting position', fen:START},
+  {group:'4-piece tablebases', name:'KR vs K: deepest mate, mate in 16', fen:'8/8/8/8/8/2k5/1R6/K7 w - - 0 1'},
+  {group:'4-piece tablebases', name:'KQ vs KR: deepest mate, mate in 35', fen:'8/8/8/8/2r5/8/2k5/K6Q w - - 0 1'},
+  {group:'5-piece GPU tablebases', name:'KBN vs KN: mate in 107, the deepest in the set', fen:'8/8/8/8/8/8/1n5B/2K1N2k w - - 0 1', noFifty:true},
+  {group:'5-piece GPU tablebases', name:'KQR vs KQ: mate in 67', fen:'8/8/8/8/q7/6k1/8/KR5Q w - - 0 1', noFifty:true},
+  {group:'5-piece GPU tablebases', name:'KRB vs KR: mate in 65, in a 78%-drawn ending', fen:'8/3B4/8/1R6/5r2/8/3K4/5k2 w - - 0 1', noFifty:true},
+  {group:'5-piece GPU tablebases', name:'KRBN vs K: mate in 29, no queen to help', fen:'8/8/8/8/8/8/6kB/K5NR w - - 0 1'},
+  {group:'5-piece GPU tablebases', name:'KQBN vs K: Black takes the queen, still mated in 33', fen:'8/8/8/8/8/8/3QB3/K1kN4 b - - 0 1'},
 ];
 
 // ---- game state (all history/undo/redo lives here; engine is stateless) ----
@@ -394,7 +405,7 @@ function renderTablebase(){
       '<code>CHESS_TB_DIR=&lt;dir&gt;</code> for perfect endgame play.</div>';
   } else if (!tv){
     const men = placement(history[ptr].fen).replace(/[^a-zA-Z]/g, '').length;
-    body.innerHTML = `<div class="tbnote">Not a tablebase position (${men} pieces). ` +
+    body.innerHTML = `<div class="tbnote">No tablebase for this position (${men} pieces). ` +
       'The engine is searching with its heuristic evaluation.</div>';
   } else if (tv.draw){
     body.innerHTML = '<div class="tbresult draw">Draw with best play</div>' +
@@ -524,7 +535,7 @@ async function maybeEngine(){
       if (mode === 'auto'){ if (!running) break; }
       else if (isHumanTurn(history[ptr].fen)) break;
       if (!await botMove()){ running = false; break; }
-      if (mode === 'auto') await sleep(250);
+      if (mode === 'auto') await sleep(+$('speed').value);
     }
   } finally {
     looping = false;
@@ -581,10 +592,21 @@ async function copyFen(){
 }
 
 // ---- wire up controls ----
-for (const [i, p] of PRESETS.entries()){
-  const o = document.createElement('option'); o.value = i; o.textContent = p.name; $('preset').appendChild(o);
+{
+  const groups = {};
+  for (const [i, p] of PRESETS.entries()){
+    if (!groups[p.group]){
+      groups[p.group] = document.createElement('optgroup'); groups[p.group].label = p.group;
+      $('preset').appendChild(groups[p.group]);
+    }
+    const o = document.createElement('option'); o.value = i; o.textContent = p.name; groups[p.group].appendChild(o);
+  }
 }
-$('preset').addEventListener('change', e => startFrom(PRESETS[+e.target.value].fen));
+$('preset').addEventListener('change', e => {
+  const p = PRESETS[+e.target.value];
+  $('fifty').checked = !p.noFifty;
+  startFrom(p.fen);
+});
 $('loadfen').addEventListener('click', () => startFrom($('fen').value));
 $('fen').addEventListener('keydown', e => { if (e.key === 'Enter') startFrom($('fen').value); });
 $('copyfen').addEventListener('click', copyFen);

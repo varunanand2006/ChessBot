@@ -59,7 +59,7 @@ ctest --test-dir build
 ./build/chess.exe tbdump KQKR 25
 
 # Load a saved .tb (e.g. a GPU-generated 5-man table): stats + deepest-mate FENs
-# (White to move, and Black to move and losing), plus a probe if a FEN is given
+# (the deepest win for each side to move), plus a probe if a FEN is given
 ./build/chess.exe tbload tables/KBNKN.tb
 ./build/chess.exe tbload tables/KBNKN.tb "<FEN>"
 ```

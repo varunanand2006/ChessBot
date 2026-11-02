@@ -46,7 +46,8 @@ With `CHESS_TB_DIR` set, the tablebase panel shows the exact result for the
 current position, and the line under it shows how many nodes the engine searched
 for its last move — a handful in a tablebase position, versus millions for the
 heuristic search. Tablebase mates can run past 50 moves without a capture, so
-untick **Enforce the 50-move rule** to watch a deep mate through to the end.
+untick **Enforce the 50-move rule** to watch a deep mate through to the end (the
+5-piece presets whose mates are that long untick it for you).
 
 To find demo positions, run `chess tbload <dir>/<MATERIAL>.tb`: it prints the
 deepest mate in that table with White to move and with Black to move. Add any you

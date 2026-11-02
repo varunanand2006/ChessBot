@@ -203,30 +203,33 @@ int run_tbload(int argc, char** argv) {
     std::printf("loaded %s  material=%s  N=%zu  W=%zu L=%zu D=%zu  maxWinDTM=%d plies (mate-in-%d)\n",
                 argv[2], tbl->name().c_str(), tbl->size(), w, l, d, mw, (mw + 1) / 2);
 
-    // Demo-ready positions: the deepest forced mate with White to move (watch the
-    // engine convert it) and the deepest with Black to move and losing (play the
-    // defender against the engine). The side to move is only decoded for a
-    // candidate that would beat the current best, so the scan stays cheap.
+    // Demo-ready positions: the deepest forced mate for each side to move. Both
+    // are needed: in e.g. KRNKQ the deepest mate (mate-in-69) belongs to the
+    // queen side, which the canonical name puts on Black. The side to move is
+    // only decoded for a candidate that would beat that side's current best, so
+    // the scan stays cheap.
     const tb::CombIndex& ci = tbl->index();
-    auto white_to_move = [&](std::size_t i) {
+    auto stm_of = [&](std::size_t i) {
         int sq[tb::CombIndex::kMaxMen];
         Color stm;
         ci.decode(i, sq, &stm);
-        return stm == Color::White;
+        return stm == Color::White ? 0 : 1;
     };
-    std::size_t wi = 0, li = 0;
-    int wbest = -1, lbest = -1;
+    std::size_t best_i[2] = {0, 0};
+    int best[2] = {-1, -1};
     for (std::size_t i = 0; i < value.size(); ++i) {
         const int16_t v = value[i];
-        if (v > 0 && tb::win_dtm(v) > wbest && white_to_move(i))   { wbest = tb::win_dtm(v);  wi = i; }
-        if (v < 0 && tb::loss_dtm(v) > lbest && !white_to_move(i)) { lbest = tb::loss_dtm(v); li = i; }
+        if (v <= 0) continue;
+        const int dtm = tb::win_dtm(v);
+        if (dtm <= std::min(best[0], best[1])) continue;  // can't beat either side's best
+        const int s = stm_of(i);
+        if (dtm > best[s]) { best[s] = dtm; best_i[s] = i; }
     }
-    if (wbest >= 0)
-        std::printf("deepest win,  White to move (mate-in-%d):  %s\n",
-                    (wbest + 1) / 2, to_fen(ci.decode_pos(wi)).c_str());
-    if (lbest >= 0)
-        std::printf("deepest loss, Black to move (mated-in-%d): %s\n",
-                    (lbest + 1) / 2, to_fen(ci.decode_pos(li)).c_str());
+    for (int s = 0; s < 2; ++s)
+        if (best[s] >= 0)
+            std::printf("deepest win, %s to move (%s mates in %d): %s\n",
+                        s == 0 ? "White" : "Black", s == 0 ? "White" : "Black",
+                        (best[s] + 1) / 2, to_fen(ci.decode_pos(best_i[s])).c_str());
 
     if (argc >= 4) {
         Position pos;
