@@ -188,8 +188,9 @@ int run_tbsave(int argc, char** argv) {
     return 0;
 }
 
-// chess tbload <path> [FEN...] — load a .tb, report its stats, and (if a FEN is
-// given) probe that position, exercising the on-disk probe path end to end.
+// chess tbload <path> [FEN...] — load a .tb, report its stats and deepest-mate
+// FENs, and (if a FEN is given) probe that position, exercising the on-disk
+// probe path end to end.
 int run_tbload(int argc, char** argv) {
     if (argc < 3) { std::fprintf(stderr, "usage: chess tbload <path> [FEN...]\n"); return 1; }
     auto tbl = tb::DiskTable::open(argv[2]);
@@ -201,6 +202,34 @@ int run_tbload(int argc, char** argv) {
     value_stats(value, w, l, d, mw);
     std::printf("loaded %s  material=%s  N=%zu  W=%zu L=%zu D=%zu  maxWinDTM=%d plies (mate-in-%d)\n",
                 argv[2], tbl->name().c_str(), tbl->size(), w, l, d, mw, (mw + 1) / 2);
+
+    // Demo-ready positions: the deepest forced mate for each side to move. Both
+    // are needed: in e.g. KRNKQ the deepest mate (mate-in-69) belongs to the
+    // queen side, which the canonical name puts on Black. The side to move is
+    // only decoded for a candidate that would beat that side's current best, so
+    // the scan stays cheap.
+    const tb::CombIndex& ci = tbl->index();
+    auto stm_of = [&](std::size_t i) {
+        int sq[tb::CombIndex::kMaxMen];
+        Color stm;
+        ci.decode(i, sq, &stm);
+        return stm == Color::White ? 0 : 1;
+    };
+    std::size_t best_i[2] = {0, 0};
+    int best[2] = {-1, -1};
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        const int16_t v = value[i];
+        if (v <= 0) continue;
+        const int dtm = tb::win_dtm(v);
+        if (dtm <= std::min(best[0], best[1])) continue;  // can't beat either side's best
+        const int s = stm_of(i);
+        if (dtm > best[s]) { best[s] = dtm; best_i[s] = i; }
+    }
+    for (int s = 0; s < 2; ++s)
+        if (best[s] >= 0)
+            std::printf("deepest win, %s to move (%s mates in %d): %s\n",
+                        s == 0 ? "White" : "Black", s == 0 ? "White" : "Black",
+                        (best[s] + 1) / 2, to_fen(ci.decode_pos(best_i[s])).c_str());
 
     if (argc >= 4) {
         Position pos;
@@ -405,7 +434,8 @@ int run_play(int argc, char** argv) {
 // undo/redo/history live entirely in the frontend and the engine is a pure
 // query service. One JSON object per line out; the caller reads line by line.
 //
-//   legal <fen...>         -> { ok, stm, check, status, eval_cp, moves:[...] }
+//   legal <fen...>         -> { ok, stm, check, status, eval_cp, tb_enabled, tb, moves:[...] }
+//                             tb = {wdl, dtm} (side-to-move relative, dtm in plies) or null
 //   go <depth> <fen...>    -> { ok, bestmove, cp, mate, nodes, depth }
 //   quit                   -> exit
 //
@@ -455,6 +485,8 @@ std::string move_note(const Position& before, Move m, bool child_check, bool chi
     return s;
 }
 
+bool g_tb_enabled = false;  // set in main() when CHESS_TB_DIR is given
+
 int run_api() {
     // FEN/notation values contain only spaces, '/', '-', '+', '#', '=', letters
     // and digits — none of JSON's special characters — so they need no escaping;
@@ -489,6 +521,16 @@ int run_api() {
             out += status;
             out += "\",\"eval_cp\":";
             out += std::to_string(eval::evaluate(pos));
+            // Exact tablebase result for this position (side-to-move relative)
+            // when probing is on and the material has a table; null otherwise.
+            out += ",\"tb_enabled\":";
+            out += g_tb_enabled ? "true" : "false";
+            out += ",\"tb\":";
+            const tb::ProbeResult pr = g_tb_enabled ? tb::probe(pos) : tb::ProbeResult{};
+            if (pr.found)
+                out += "{\"wdl\":" + std::to_string(pr.wdl) + ",\"dtm\":" + std::to_string(pr.dtm) + "}";
+            else
+                out += "null";
             out += ",\"moves\":[";
             for (int i = 0; i < ml.size(); ++i) {
                 const Move m = ml[i];
@@ -563,6 +605,7 @@ int main(int argc, char** argv) {
     if (const char* dir = std::getenv("CHESS_TB_DIR")) {
         tb::set_table_dir(dir);
         search::set_use_tablebase(true);
+        g_tb_enabled = true;
     }
 
     if (argc >= 3 && std::strcmp(argv[1], "perft") == 0)  return run_perft(argc, argv, false);
@@ -582,7 +625,7 @@ int main(int argc, char** argv) {
     std::printf("  chess tb     <material>   e.g. Q, R, KQK, KQKR, KRKN\n");
     std::printf("  chess tbdump <material> [N]        sample positions as CSV (fen,cat,dtm)\n");
     std::printf("  chess tbsave <material> <path>     solve + persist a table to disk (.tb)\n");
-    std::printf("  chess tbload <path> [FEN...]       load a .tb; probe a position if given\n");
+    std::printf("  chess tbload <path> [FEN...]       load a .tb, print deepest-mate FENs; probe a FEN if given\n");
     std::printf("  chess search <depth> [FEN...]      best move for a position\n");
     std::printf("  chess play   [depth] [FEN...]      play vs the engine (you are White)\n");
     std::printf("  chess api                          JSON stdin/stdout service (web frontend)\n");
